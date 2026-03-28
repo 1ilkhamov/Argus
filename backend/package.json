@@ -31,7 +31,7 @@
     "js-yaml": "^4.1.1",
     "mathjs": "^15.1.1",
     "nodemailer": "^8.0.4",
-    "openai": "^4.70.0",
+    "openai": "^6.33.0",
     "pdf-parse": "^2.4.5",
     "pg": "^8.13.1",
     "playwright": "^1.58.2",
