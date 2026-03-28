@@ -1,0 +1,56 @@
+{
+  "name": "argus-one",
+  "version": "0.1.0",
+  "description": "Local-first AI workspace with root CLI, NestJS backend, React frontend, memory, tools, and Telegram integrations",
+  "license": "MIT",
+  "keywords": [
+    "ai",
+    "assistant",
+    "local-first",
+    "cli",
+    "nestjs",
+    "react",
+    "telegram",
+    "memory",
+    "tools"
+  ],
+  "homepage": "https://github.com/1ilkhamov/Argus#readme",
+  "bugs": {
+    "url": "https://github.com/1ilkhamov/Argus/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1ilkhamov/Argus.git"
+  },
+  "bin": {
+    "argus-one": "cli/bin/argus-one.js"
+  },
+  "files": [
+    "cli",
+    "backend",
+    "frontend",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "SUPPORT.md",
+    "RELEASING.md",
+    "docs",
+    "docker-compose.yml"
+  ],
+  "scripts": {
+    "onboard": "node cli/bin/argus-one.js onboard",
+    "doctor": "node cli/bin/argus-one.js doctor",
+    "start": "node cli/bin/argus-one.js start",
+    "help": "node cli/bin/argus-one.js --help",
+    "test:cli": "node --test cli/test/**/*.test.js",
+    "test:backend": "npm test --prefix backend -- --runInBand",
+    "test:backend:e2e": "npm run test:e2e --prefix backend -- --runInBand",
+    "test:frontend": "npm test --prefix frontend",
+    "verify": "npm run test:cli && npm run test:backend && npm run test:backend:e2e && npm run test:frontend"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

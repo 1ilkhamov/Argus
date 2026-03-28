@@ -1,0 +1,64 @@
+name: Feature request
+description: Предложить улучшение для CLI, backend, frontend, памяти, инструментов или интеграций
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за идею.
+
+        Хороший feature request обычно отвечает на три вопроса:
+        - какая проблема сейчас существует
+        - какое поведение хочется получить
+        - почему это важно именно для Argus
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Затронутая зона
+      options:
+        - CLI
+        - Backend
+        - Frontend
+        - Memory
+        - Tools
+        - Telegram Bot
+        - Telegram Client
+        - Docs
+        - DevEx / CI
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему это решает
+      placeholder: Сейчас невозможно / неудобно / не хватает ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое решение
+      placeholder: Хотелось бы, чтобы проект поддерживал / делал / показывал ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Рассмотренные альтернативы
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Что нужно будет затронуть
+      description: Если понимаете, перечислите затронутые части проекта
+      placeholder: README, docs, backend, frontend, tools, auth, Telegram и т.д.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительный контекст

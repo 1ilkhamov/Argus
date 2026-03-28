@@ -1,0 +1,30 @@
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+  categories:
+    - title: Breaking Changes
+      labels:
+        - breaking-change
+    - title: Backend
+      labels:
+        - backend
+        - api
+        - memory
+        - telegram
+    - title: Frontend
+      labels:
+        - frontend
+        - ui
+    - title: CLI and Tooling
+      labels:
+        - cli
+        - tooling
+        - ci
+    - title: Documentation
+      labels:
+        - documentation
+        - docs
+    - title: Dependencies
+      labels:
+        - dependencies

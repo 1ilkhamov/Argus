@@ -1,0 +1,89 @@
+name: Bug report
+description: Сообщить о баге в CLI, backend, frontend, памяти, инструментах или интеграциях
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт.
+
+        Перед отправкой проверьте, что:
+        - проблема воспроизводится на актуальном коде
+        - вы приложили шаги воспроизведения
+        - в отчёте нет секретов, токенов и приватных данных
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Затронутая зона
+      options:
+        - CLI
+        - Backend
+        - Frontend
+        - Memory
+        - Tools
+        - Telegram Bot
+        - Telegram Client
+        - Docs
+        - CI / GitHub
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Краткое описание
+      description: Что именно сломано?
+      placeholder: Например, backend не стартует после onboarding или tool orchestration не вызывается в Telegram client path
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактическое поведение
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи, stack trace, скриншоты
+      description: Удалите секреты перед отправкой
+      render: shell
+
+  - type: input
+    id: node
+    attributes:
+      label: Версия Node.js
+      placeholder: 22.x
+
+  - type: input
+    id: environment
+    attributes:
+      label: Окружение
+      placeholder: macOS / Linux / Docker / CI
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительный контекст

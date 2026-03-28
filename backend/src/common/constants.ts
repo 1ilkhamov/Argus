@@ -1,0 +1,2 @@
+export const CONVERSATION_TITLE_MAX_LENGTH = 50;
+export const DEFAULT_CONVERSATION_TITLE = 'New Chat';

@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: argus
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      CORS_ORIGIN: http://localhost:8080
+      AUTH_ENABLED: 'true'
+      AUTH_API_KEYS: ${AUTH_API_KEYS}
+      AUTH_ADMIN_API_KEY: ${AUTH_ADMIN_API_KEY}
+      SETTINGS_ENCRYPTION_SECRET: ${SETTINGS_ENCRYPTION_SECRET:-}
+      RATE_LIMIT_ENABLED: 'true'
+      RATE_LIMIT_WINDOW_MS: 60000
+      RATE_LIMIT_MAX_REQUESTS: 60
+      RATE_LIMIT_BACKEND: redis
+      RATE_LIMIT_STORE_FILE: /app/data/rate-limit.db
+      RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+      STORAGE_DRIVER: postgres
+      STORAGE_DATA_FILE: /app/data/chat-store.json
+      STORAGE_DB_FILE: /app/data/chat-store.db
+      STORAGE_MEMORY_DB_FILE: /app/data/memory-store.db
+      STORAGE_POSTGRES_URL: postgres://argus:argus@postgres:5432/argus
+      LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:8317/v1}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: local-model
+      LLM_MAX_TOKENS: 4096
+      LLM_TEMPERATURE: 0.7
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - backend_data:/app/data
+    ports:
+      - '3000:3000'
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    environment:
+      API_KEY: ${AUTH_API_KEYS}
+      ADMIN_API_KEY: ${AUTH_ADMIN_API_KEY}
+    ports:
+      - '8080:80'
+
+volumes:
+  backend_data:
+  postgres_data:

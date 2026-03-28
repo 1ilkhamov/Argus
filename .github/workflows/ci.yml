@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run test:cli
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test -- --runInBand
+        env:
+          AUTH_ENABLED: 'false'
+          LLM_API_KEY: test-key
+      - run: npm run test:e2e -- --runInBand
+        env:
+          AUTH_ENABLED: 'false'
+          LLM_API_KEY: test-key
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  smoke:
+    needs: [backend]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+      - name: Start backend
+        run: node dist/main &
+        env:
+          PORT: '2901'
+          NODE_ENV: test
+          AUTH_ENABLED: 'false'
+          LLM_API_KEY: test-key
+          LLM_API_BASE: http://localhost:11434/v1
+          LLM_PROVIDER: local
+          STORAGE_DRIVER: sqlite
+          RATE_LIMIT_ENABLED: 'false'
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:2901/api/health > /dev/null 2>&1; then
+              echo "Backend is up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend failed to start within 30s"
+          exit 1
+
+      - name: Smoke — public health endpoint
+        run: |
+          status=$(curl -sf -o /dev/null -w '%{http_code}' http://localhost:2901/api/health)
+          [ "$status" = "200" ] || { echo "FAIL: GET /api/health returned $status"; exit 1; }
+          echo "PASS: GET /api/health -> 200"
+
+      - name: Smoke — stop unauthenticated backend
+        run: pkill -f 'node dist/main' || true
+
+      - name: Start backend with auth on
+        run: node dist/main &
+        env:
+          PORT: '2901'
+          NODE_ENV: test
+          AUTH_ENABLED: 'true'
+          AUTH_API_KEYS: smoke-test-key
+          LLM_API_KEY: test-key
+          LLM_API_BASE: http://localhost:11434/v1
+          LLM_PROVIDER: local
+          STORAGE_DRIVER: sqlite
+          RATE_LIMIT_ENABLED: 'false'
+
+      - name: Wait for auth backend health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:2901/api/health > /dev/null 2>&1; then
+              echo "Backend is up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend failed to start within 30s"
+          exit 1
+
+      - name: Smoke — unauthenticated chat rejected when auth on
+        run: |
+          status=$(curl -sf -o /dev/null -w '%{http_code}' http://localhost:2901/api/chat/conversations 2>/dev/null || echo "000")
+          [ "$status" = "401" ] || { echo "FAIL: expected 401, got $status"; exit 1; }
+          echo "PASS: unauthenticated request -> 401"
+
+      - name: Smoke — authenticated chat works with API key
+        run: |
+          status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
+          [ "$status" = "200" ] || { echo "FAIL: expected 200, got $status"; exit 1; }
+          echo "PASS: authenticated request -> 200"
+
+      - name: Smoke — conversations list (auth on)
+        run: |
+          status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
+          [ "$status" = "200" ] || { echo "FAIL: GET /api/chat/conversations returned $status"; exit 1; }
+          echo "PASS: GET /api/chat/conversations -> 200"
+
+      - name: Smoke — create conversation via message (auth on)
+        run: |
+          response=$(curl -sf -X POST http://localhost:2901/api/chat/messages \
+            -H 'Content-Type: application/json' \
+            -H 'X-API-Key: smoke-test-key' \
+            -d '{"content":"smoke test ping"}' \
+            -w '\n%{http_code}')
+          status=$(echo "$response" | tail -1)
+          [ "$status" = "200" ] || { echo "FAIL: POST /api/chat/messages returned $status"; echo "$response"; exit 1; }
+          echo "PASS: POST /api/chat/messages -> 200"

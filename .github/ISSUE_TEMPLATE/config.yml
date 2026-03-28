@@ -1,0 +1,9 @@
+blank_issues_enabled: true
+
+contact_links:
+  - name: Documentation
+    url: https://github.com/1ilkhamov/Argus/tree/main/docs
+    about: Перед issue проверьте README и docs проекта
+  - name: Security policy
+    url: https://github.com/1ilkhamov/Argus/blob/main/SECURITY.md
+    about: Для security-вопросов не используйте публичные issues
