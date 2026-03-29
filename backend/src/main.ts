@@ -7,17 +7,22 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { DEFAULT_CORS_ORIGIN, DEFAULT_PORT } from './config/defaults';
+import { FileLoggerService } from './common/logger/file-logger.service';
 
 type NestLoggerLevel = 'error' | 'warn' | 'log' | 'debug' | 'verbose' | 'fatal';
 
 async function bootstrap() {
-  const logger = new Logger('Bootstrap');
   const loggerLevels: NestLoggerLevel[] =
     process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : ['error', 'warn', 'log', 'debug', 'verbose'];
 
+  const fileLogger = new FileLoggerService();
+  fileLogger.setLogLevels(loggerLevels);
+
   const app = await NestFactory.create(AppModule, {
-    logger: loggerLevels,
+    logger: fileLogger,
   });
+
+  const logger = fileLogger;
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('port', DEFAULT_PORT);
