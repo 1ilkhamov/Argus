@@ -1,6 +1,6 @@
 import { ToolExecutorService } from './tool-executor.service';
 import { ToolRegistryService } from '../registry/tool-registry.service';
-import { ToolSafetyService, type ToolSafetyDecision } from '../safety/tool-safety.service';
+import { ToolSafetyService } from '../safety/tool-safety.service';
 import type { Tool, ToolDefinition, ToolCall, ToolSafetyLevel } from '../tool.types';
 
 const createMockTool = (name: string, executeFn?: () => Promise<string>, safety: ToolSafetyLevel = 'safe'): Tool => ({

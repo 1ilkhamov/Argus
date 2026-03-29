@@ -76,7 +76,7 @@ export function validateSoulConfig(raw: unknown): SoulConfig | { error: string }
   }
 
   // Optional defaultBehavior
-  let defaultBehavior: SoulConfig['defaultBehavior'] = {
+  const defaultBehavior: SoulConfig['defaultBehavior'] = {
     initiative: 'medium',
     assertiveness: 'medium',
     warmth: 'medium',

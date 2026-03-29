@@ -7,9 +7,6 @@ import { analyzeImageWithVision } from '../../shared/vision-analyze';
 import { BrowserSessionService } from './browser-session.service';
 import { LlmService } from '../../../llm/llm.service';
 
-/** Maximum output length returned to LLM */
-const MAX_OUTPUT = 12_000;
-
 // ─── Tool ────────────────────────────────────────────────────────────────────
 
 @Injectable()

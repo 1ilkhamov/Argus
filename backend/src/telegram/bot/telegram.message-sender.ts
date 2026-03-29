@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { Context, Telegraf } from 'telegraf';
+import type { Telegraf } from 'telegraf';
 
 /**
  * Handles sending messages back to Telegram, including:
@@ -149,7 +149,7 @@ export class TelegramMessageSender {
       const escaped = this.escapeHtml(code.replace(/\n$/, ''));
       const langAttr = lang ? ` class="language-${this.escapeHtml(lang)}"` : '';
       codeBlocks.push(`<pre><code${langAttr}>${escaped}</code></pre>`);
-      return `\x00CB${idx}\x00`;
+      return `@@CB${idx}@@`;
     });
 
     // 2. Extract inline code → placeholders
@@ -157,7 +157,7 @@ export class TelegramMessageSender {
     result = result.replace(/`([^`\n]+)`/g, (_match, code) => {
       const idx = inlineCodes.length;
       inlineCodes.push(`<code>${this.escapeHtml(code)}</code>`);
-      return `\x00IC${idx}\x00`;
+      return `@@IC${idx}@@`;
     });
 
     // 3. Escape HTML in remaining text
@@ -184,8 +184,8 @@ export class TelegramMessageSender {
     result = result.replace(/^[-*]{3,}$/gm, '───────────');
 
     // 10. Restore placeholders
-    result = result.replace(/\x00CB(\d+)\x00/g, (_m, idx) => codeBlocks[Number(idx)] ?? '');
-    result = result.replace(/\x00IC(\d+)\x00/g, (_m, idx) => inlineCodes[Number(idx)] ?? '');
+    result = result.replace(/@@CB(\d+)@@/g, (_m, idx) => codeBlocks[Number(idx)] ?? '');
+    result = result.replace(/@@IC(\d+)@@/g, (_m, idx) => inlineCodes[Number(idx)] ?? '');
 
     return result.trim();
   }

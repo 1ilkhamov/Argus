@@ -2,7 +2,6 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import type { LlmService } from '../../llm/llm.service';
 import { MemoryStoreService } from '../core/memory-store.service';
-import type { MemoryEntry } from '../core/memory-entry.types';
 import type { SessionReflectionResult } from './action-log.types';
 
 const SESSION_REFLECTION_PROMPT = `You are a reflective AI assistant performing a deep end-of-session analysis.

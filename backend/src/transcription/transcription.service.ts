@@ -13,6 +13,32 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_MODEL = 'Xenova/whisper-base';
 const CONVERSION_TIMEOUT_MS = 120_000;
 
+type AudioTranscriptionOptions = {
+  return_timestamps: false;
+  chunk_length_s: number;
+  stride_length_s: number;
+  language?: string;
+  task?: 'transcribe';
+};
+
+type AudioTranscriptionOutput = {
+  text?: string;
+};
+
+type AudioTranscriber = (
+  audioSamples: Float32Array,
+  options: AudioTranscriptionOptions,
+) => Promise<AudioTranscriptionOutput>;
+
+type TransformersEnv = {
+  allowLocalModels: boolean;
+};
+
+type TranscriptionPipelineFactory = (
+  task: 'automatic-speech-recognition',
+  modelName: string,
+) => Promise<AudioTranscriber>;
+
 export interface TranscriptionResult {
   text: string;
   durationMs: number;
@@ -26,7 +52,7 @@ export class TranscriptionService implements OnModuleInit {
   readonly modelName: string;
   readonly enabled: boolean;
 
-  private transcriber: any = null;
+  private transcriber: AudioTranscriber | null = null;
   private loadingPromise: Promise<void> | null = null;
   private converterType: 'ffmpeg' | 'afconvert' | null = null;
 
@@ -67,7 +93,7 @@ export class TranscriptionService implements OnModuleInit {
     const audioSamples = await this.loadAudioSamples(filePath, ext);
 
     const startTime = Date.now();
-    const options: Record<string, unknown> = {
+    const options: AudioTranscriptionOptions = {
       return_timestamps: false,
       chunk_length_s: 30,
       stride_length_s: 5,
@@ -79,7 +105,7 @@ export class TranscriptionService implements OnModuleInit {
       options.task = 'transcribe';
     }
 
-    const result = await this.transcriber(audioSamples, options);
+    const result = await this.transcriber!(audioSamples, options);
     const durationMs = Date.now() - startTime;
     const text = String(result?.text ?? '').trim();
 
@@ -118,9 +144,9 @@ export class TranscriptionService implements OnModuleInit {
     this.logger.log(`Loading Whisper model: ${this.modelName} (first run downloads ~150MB)...`);
 
     const transformers = await import('@xenova/transformers');
-    transformers.env.allowLocalModels = false;
+    (transformers.env as TransformersEnv).allowLocalModels = false;
 
-    this.transcriber = await transformers.pipeline(
+    this.transcriber = await (transformers.pipeline as TranscriptionPipelineFactory)(
       'automatic-speech-recognition',
       this.modelName,
     );

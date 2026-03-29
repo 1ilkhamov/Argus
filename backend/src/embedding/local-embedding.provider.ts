@@ -1,8 +1,32 @@
 import { Logger } from '@nestjs/common';
 
+type EmbeddingExtractionOptions = {
+  pooling: 'mean';
+  normalize: boolean;
+};
+
+type EmbeddingOutput = {
+  data: Float32Array | number[];
+  dims: number[];
+};
+
+type EmbeddingExtractor = (
+  input: string | string[],
+  options: EmbeddingExtractionOptions,
+) => Promise<EmbeddingOutput>;
+
+type TransformerPipelineFactory = (
+  task: 'feature-extraction',
+  modelName: string,
+) => Promise<EmbeddingExtractor>;
+
+type TransformerEnv = {
+  allowLocalModels: boolean;
+};
+
 // Lazy-loaded to avoid import issues when not used
-let pipeline: any;
-let env: any;
+let pipeline: TransformerPipelineFactory | undefined;
+let env: TransformerEnv | undefined;
 
 const DEFAULT_LOCAL_MODEL = 'Xenova/multilingual-e5-small';
 
@@ -17,7 +41,7 @@ const DEFAULT_LOCAL_MODEL = 'Xenova/multilingual-e5-small';
 export class LocalEmbeddingProvider {
   private readonly logger = new Logger(LocalEmbeddingProvider.name);
   private readonly modelName: string;
-  private extractor: any = null;
+  private extractor: EmbeddingExtractor | null = null;
   private dimensions = 0;
   private ready = false;
 
@@ -28,8 +52,8 @@ export class LocalEmbeddingProvider {
   async init(): Promise<boolean> {
     try {
       const transformers = await import('@xenova/transformers');
-      pipeline = transformers.pipeline;
-      env = transformers.env;
+      pipeline = transformers.pipeline as TransformerPipelineFactory;
+      env = transformers.env as TransformerEnv;
 
       // Disable local model check — always download from hub if needed
       env.allowLocalModels = false;
@@ -39,7 +63,7 @@ export class LocalEmbeddingProvider {
 
       // Probe dimensions with a test embedding
       const testOutput = await this.extractor('test', { pooling: 'mean', normalize: true });
-      this.dimensions = testOutput.dims[testOutput.dims.length - 1];
+      this.dimensions = testOutput.dims[testOutput.dims.length - 1] ?? 0;
       this.ready = true;
 
       this.logger.log(

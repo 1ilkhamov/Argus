@@ -169,7 +169,6 @@ export class WebhookTool implements Tool, OnModuleInit {
 
     if (hooks.length === 0) return 'No webhooks configured.';
 
-    const port = this.configService.get<number>('port', 2901);
     const lines = [`${hooks.length} webhook(s):\n`];
 
     for (const hook of hooks) {

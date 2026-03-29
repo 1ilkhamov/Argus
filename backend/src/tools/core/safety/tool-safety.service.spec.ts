@@ -1,7 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 
 import { ToolSafetyService } from './tool-safety.service';
-import type { ToolSafetyLevel } from '../tool.types';
 
 const createConfigService = (overrides: Record<string, unknown> = {}): ConfigService => {
   const config: Record<string, unknown> = {

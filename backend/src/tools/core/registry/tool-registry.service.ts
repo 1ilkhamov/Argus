@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 import type { Tool, ToolDefinition } from '../tool.types';
 import type { ToolSafetyService } from '../safety/tool-safety.service';

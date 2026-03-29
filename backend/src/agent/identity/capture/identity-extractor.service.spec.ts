@@ -1,4 +1,4 @@
-import { IdentityExtractorService, type IdentityExtractionResult } from './identity-extractor.service';
+import { IdentityExtractorService } from './identity-extractor.service';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

@@ -238,7 +238,7 @@ export class TelegramUpdateHandler {
     // Group by category
     const groups = new Map<string, typeof tools>();
     for (const t of tools) {
-      const cat = (t as any).category || 'общее';
+      const cat = t.category || 'общее';
       if (!groups.has(cat)) groups.set(cat, []);
       groups.get(cat)!.push(t);
     }
@@ -321,7 +321,11 @@ export class TelegramUpdateHandler {
     try {
       const chat = await this.clientRepository.findByChatId(targetChatId);
       if (chat) chatTitle = chat.chatTitle;
-    } catch {}
+    } catch (error) {
+      this.logger.debug(
+        `Failed to resolve chat title for ${targetChatId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     // Store awaiting reply
     this.pendingNotify.setAwaitingReply(botChatId, {

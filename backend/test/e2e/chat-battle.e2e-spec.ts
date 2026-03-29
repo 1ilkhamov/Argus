@@ -98,7 +98,6 @@ describe('Chat battle (e2e)', () => {
     process.env.RATE_LIMIT_ENABLED = 'false';
     process.env.LLM_API_KEY = process.env.LLM_API_KEY ?? 'test-llm-key';
     process.env.LLM_API_BASE = process.env.LLM_API_BASE ?? 'http://localhost:8317/v1';
-    if (process.env.LLM_MODEL) process.env.LLM_MODEL = process.env.LLM_MODEL;
 
     const { AppModule } = await import('../../src/app.module');
 

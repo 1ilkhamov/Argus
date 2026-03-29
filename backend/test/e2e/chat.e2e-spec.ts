@@ -6,10 +6,8 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import * as request from 'supertest';
 
-import { deriveScopeKey } from '../../src/common/auth/scope-key';
 import { LlmService } from '../../src/llm/llm.service';
 
-const TEST_USER_SCOPE_KEY = deriveScopeKey('test-key');
 const EMPTY_EXTRACTION_JSON = JSON.stringify({
   items: [],
   invalidations: [],
@@ -31,21 +29,6 @@ describe('Chat API (e2e)', () => {
   let capturedCompleteMessages: Array<{ role: string; content: string }> = [];
   let capturedCompletionCalls: Array<Array<{ role: string; content: string }>> = [];
   let queuedCompleteResponses: string[] = [];
-
-  const adminGet = (path: string, scopeKey?: string) => {
-    const req = request(app.getHttpServer()).get(path).set('x-api-key', 'test-admin-key');
-    return scopeKey ? req.query({ scopeKey }) : req;
-  };
-
-  const adminPost = (path: string, scopeKey?: string) => {
-    const req = request(app.getHttpServer()).post(path).set('x-api-key', 'test-admin-key');
-    return scopeKey ? req.query({ scopeKey }) : req;
-  };
-
-  const adminDelete = (path: string, scopeKey?: string) => {
-    const req = request(app.getHttpServer()).delete(path).set('x-api-key', 'test-admin-key');
-    return scopeKey ? req.query({ scopeKey }) : req;
-  };
 
   let seedSeq = 0;
   const seedMemory = async (kind: string, content: string, opts: { category?: string; tags?: string[]; importance?: number; pinned?: boolean } = {}) => {

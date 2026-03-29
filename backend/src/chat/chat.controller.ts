@@ -23,7 +23,6 @@ import { diskStorage } from 'multer';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
-import * as path from 'node:path';
 
 import { AuthenticatedUserGuard } from '../common/guards/authenticated-user.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';

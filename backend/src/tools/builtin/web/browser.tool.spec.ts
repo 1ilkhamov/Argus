@@ -227,7 +227,7 @@ describe('BrowserTool', () => {
   // ─── Evaluate ────────────────────────────────────────────────────────────
 
   it('should evaluate JS expression', async () => {
-    const result = await tool.execute({ action: 'evaluate', expression: 'document.title' });
+    await tool.execute({ action: 'evaluate', expression: 'document.title' });
     expect(mockBrowserService.evaluate).toHaveBeenCalledWith(mockSession, 'document.title');
   });
 
@@ -239,7 +239,7 @@ describe('BrowserTool', () => {
   // ─── Select ──────────────────────────────────────────────────────────────
 
   it('should select an option', async () => {
-    const result = await tool.execute({ action: 'select', selector: 'select#lang', text: 'en' });
+    await tool.execute({ action: 'select', selector: 'select#lang', text: 'en' });
     expect(mockBrowserService.selectOption).toHaveBeenCalledWith(mockSession, 'select#lang', 'en');
   });
 

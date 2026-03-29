@@ -213,7 +213,16 @@ export class SystemRunTool implements Tool, OnModuleInit {
       }
 
       let settled = false;
-      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const killTimer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // already exited
+        }
+      }, timeout + 5_000);
 
       const child = exec(command, {
         cwd,
@@ -225,9 +234,7 @@ export class SystemRunTool implements Tool, OnModuleInit {
         env: cleanEnv,
       }, (error, stdout, stderr) => {
         settled = true;
-        if (killTimer) {
-          clearTimeout(killTimer);
-        }
+        clearTimeout(killTimer);
 
         const exitCode = error?.code ?? (error ? 1 : 0);
         const timedOut = error?.killed === true;
@@ -239,18 +246,6 @@ export class SystemRunTool implements Tool, OnModuleInit {
           timedOut,
         });
       });
-
-      // Safety net: force kill if still running after timeout + grace period
-      killTimer = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          // already exited
-        }
-      }, timeout + 5_000);
     });
   }
 }

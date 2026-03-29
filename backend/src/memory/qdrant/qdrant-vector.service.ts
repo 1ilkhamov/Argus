@@ -12,6 +12,16 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const CIRCUIT_BREAKER_THRESHOLD = 3;
 const CIRCUIT_BREAKER_RESET_MS = 30_000;
 
+type QdrantCollectionInfo = {
+  config?: {
+    params?: {
+      vectors?: {
+        size?: number;
+      };
+    };
+  };
+};
+
 @Injectable()
 export class QdrantVectorService implements OnModuleInit {
   private readonly logger = new Logger(QdrantVectorService.name);
@@ -109,8 +119,8 @@ export class QdrantVectorService implements OnModuleInit {
     try {
       const existing = await this.request('GET', `/collections/${this.config.collectionName}`);
       if (existing?.result) {
-        const result = existing.result as Record<string, any> | undefined;
-        const existingSize = result?.config?.params?.vectors?.size as number | undefined;
+        const result = existing.result as QdrantCollectionInfo | undefined;
+        const existingSize = result?.config?.params?.vectors?.size;
         if (existingSize && existingSize !== this.config.vectorSize) {
           this.logger.warn(
             `Qdrant collection dimension mismatch: existing=${existingSize}, configured=${this.config.vectorSize} — recreating`,

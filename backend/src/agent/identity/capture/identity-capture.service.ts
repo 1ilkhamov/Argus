@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { EmbeddingService } from '../../../embedding/embedding.service';
 import type { CreateMemoryEntryParams, MemoryEntry } from '../../../memory/core/memory-entry.types';

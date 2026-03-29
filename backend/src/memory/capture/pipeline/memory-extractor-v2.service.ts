@@ -2,7 +2,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { LlmService } from '../../../llm/llm.service';
 import type { LlmMessage } from '../../../llm/interfaces/llm.interface';
-import type { MemoryKind, MemorySource } from '../../core/memory-entry.types';
+import type { MemoryKind } from '../../core/memory-entry.types';
 
 // ─── Extraction Result ──────────────────────────────────────────────────────
 

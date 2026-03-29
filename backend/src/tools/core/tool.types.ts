@@ -39,6 +39,9 @@ export interface ToolDefinition {
   /** Human-readable description for the LLM */
   description: string;
 
+  /** Optional category used for diagnostics and grouped UIs */
+  category?: string;
+
   /** Parameter schema (OpenAI function calling format) */
   parameters: ToolParameters;
 

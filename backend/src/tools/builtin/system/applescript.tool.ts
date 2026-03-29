@@ -1,8 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { execFile } from 'node:child_process';
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { ToolRegistryService } from '../../core/registry/tool-registry.service';

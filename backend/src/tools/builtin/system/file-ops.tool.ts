@@ -652,11 +652,7 @@ export class FileOpsTool implements Tool, OnModuleInit {
   private async findExistingAncestor(filePath: string): Promise<string> {
     let current = path.resolve(filePath);
 
-    while (true) {
-      if (existsSync(current)) {
-        return current;
-      }
-
+    while (!existsSync(current)) {
       const parent = path.dirname(current);
       if (parent === current) {
         return current;
@@ -664,6 +660,8 @@ export class FileOpsTool implements Tool, OnModuleInit {
 
       current = parent;
     }
+
+    return current;
   }
 
   private isWithinAllowedRoots(candidatePath: string): boolean {
