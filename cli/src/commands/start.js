@@ -5,7 +5,6 @@ const {
   frontendDir,
   ensureDirectoryExists,
   validateNodeVersion,
-  ensureArgusWorkspace,
   hasInstalledDependencies,
   getConfiguredBackendPort,
 } = require('../core/env');
@@ -15,7 +14,6 @@ const { fail, printStatus, logCliHeader, logCliFlowStart, logKeyValuePanel, logP
 
 async function runStart() {
   validateNodeVersion();
-  ensureArgusWorkspace();
   ensureDirectoryExists(backendDir);
   ensureDirectoryExists(frontendDir);
 

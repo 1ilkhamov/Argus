@@ -5,7 +5,6 @@ const {
   frontendDir,
   ensureDirectoryExists,
   validateNodeVersion,
-  ensureArgusWorkspace,
   hasInstalledDependencies,
   getConfiguredBackendPort,
   readBackendConfig,
@@ -16,7 +15,6 @@ const { logCliHeader, logCliFlowStart, logStatusPanel, logStepList, logCliFlowEn
 
 async function runDoctor() {
   validateNodeVersion();
-  ensureArgusWorkspace();
   ensureDirectoryExists(backendDir);
   ensureDirectoryExists(frontendDir);
 

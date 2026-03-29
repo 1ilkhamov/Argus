@@ -1,5 +1,7 @@
 const path = require('node:path');
+const fs = require('node:fs');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const readlinePromises = require('node:readline/promises');
 const {
   backendDir,
@@ -8,6 +10,8 @@ const {
   frontendEnvPath,
   backendExampleEnvPath,
   frontendExampleEnvPath,
+  WORKSPACE_CONFIG_FILE,
+  workspaceRootDetected,
   DEFAULT_BACKEND_PORT,
   DEFAULT_FRONTEND_PORT,
   LLM_PROVIDER_OPTIONS,
@@ -19,7 +23,6 @@ const {
   ensureDirectoryExists,
   ensureFileExists,
   validateNodeVersion,
-  ensureArgusWorkspace,
   readBackendConfig,
   writeEnvFile,
 } = require('../core/env');
@@ -614,7 +617,41 @@ async function buildOnboardingConfig(flags = new Set()) {
 
 async function runOnboard({ flags = new Set() } = {}) {
   validateNodeVersion();
-  ensureArgusWorkspace();
+
+  if (!workspaceRootDetected) {
+    const targetPath = path.resolve(process.cwd(), 'Argus');
+
+    if (fs.existsSync(targetPath)) {
+      fs.writeFileSync(WORKSPACE_CONFIG_FILE, targetPath, 'utf8');
+    } else {
+      const gitCheck = spawnSync('git', ['--version'], { stdio: 'pipe' });
+      if (gitCheck.status !== 0) {
+        const { fail } = require('../ui/render');
+        fail('git is required but not found. Install git from https://git-scm.com and try again.');
+      }
+
+      const cloneResult = spawnSync(
+        'git',
+        ['clone', 'https://github.com/1ilkhamov/Argus.git', targetPath],
+        { stdio: 'inherit', env: process.env },
+      );
+
+      if (cloneResult.status !== 0) {
+        const { fail } = require('../ui/render');
+        fail('git clone failed. Check your internet connection and try again.');
+      }
+
+      fs.writeFileSync(WORKSPACE_CONFIG_FILE, targetPath, 'utf8');
+    }
+
+    const result = spawnSync(process.execPath, [process.argv[1], 'onboard'], {
+      cwd: targetPath,
+      stdio: 'inherit',
+      env: process.env,
+    });
+    process.exit(result.status || 0);
+  }
+
   ensureDirectoryExists(backendDir);
   ensureDirectoryExists(frontendDir);
   ensureFileExists(path.join(backendDir, 'package.json'));

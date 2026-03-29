@@ -30,9 +30,7 @@
 
 ```bash
 npm install -g argus-one
-argus-one init
-cd Argus
-argus-one onboard
+argus-one onboard   # клонирует репозиторий автоматически
 argus-one start
 ```
 
@@ -198,14 +196,10 @@ Argus/
 
 ```bash
 npm install -g argus-one
-argus-one init          # клонирует репозиторий Argus в ./Argus
-cd Argus
-argus-one onboard
-argus-one doctor
+argus-one onboard   # клонирует репозиторий Argus автоматически если нужно
 argus-one start
 ```
 
-- `argus-one init [--dir=<name>]`
 - `argus-one onboard`
 - `argus-one doctor`
 - `argus-one start`

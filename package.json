@@ -1,6 +1,6 @@
 {
   "name": "argus-one",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local-first AI workspace with root CLI, NestJS backend, React frontend, memory, tools, and Telegram integrations",
   "license": "MIT",
   "keywords": [

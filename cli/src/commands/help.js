@@ -7,9 +7,7 @@ function runHelp() {
     'Quick start on a new machine',
     [
       'npm install -g argus-one',
-      'argus-one init',
-      'cd Argus',
-      'argus-one onboard',
+      'argus-one onboard   (clones repo automatically)',
       'argus-one start',
     ],
     { tone: 'green' },

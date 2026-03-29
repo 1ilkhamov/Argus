@@ -1,5 +1,22 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+
+const WORKSPACE_CONFIG_FILE = path.join(os.homedir(), '.argus-one-workspace');
+
+function readSavedWorkspacePath() {
+  try {
+    if (fs.existsSync(WORKSPACE_CONFIG_FILE)) {
+      const saved = fs.readFileSync(WORKSPACE_CONFIG_FILE, 'utf8').trim();
+      if (saved && isArgusWorkspaceRoot(saved)) {
+        return saved;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 function isArgusWorkspaceRoot(directoryPath) {
   return [
@@ -29,7 +46,9 @@ function findArgusWorkspaceRoot(startDir) {
 }
 
 const workspaceSearchStart = process.cwd();
-const detectedWorkspaceRoot = findArgusWorkspaceRoot(workspaceSearchStart);
+const detectedFromCwd = findArgusWorkspaceRoot(workspaceSearchStart);
+const detectedFromSaved = detectedFromCwd === null ? readSavedWorkspacePath() : null;
+const detectedWorkspaceRoot = detectedFromCwd || detectedFromSaved;
 const workspaceRootDetected = detectedWorkspaceRoot !== null;
 const repoRoot = detectedWorkspaceRoot || workspaceSearchStart;
 const backendDir = path.join(repoRoot, 'backend');
@@ -119,6 +138,7 @@ const ANSI = {
 };
 
 module.exports = {
+  WORKSPACE_CONFIG_FILE,
   repoRoot,
   workspaceSearchStart,
   workspaceRootDetected,
