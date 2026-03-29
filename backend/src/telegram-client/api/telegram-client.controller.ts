@@ -14,14 +14,18 @@ import { RateLimitGuard } from '../../common/guards/rate-limit.guard';
 import { TelegramClientService } from '../telegram-client.service';
 import { TelegramClientRepository } from '../telegram-client.repository';
 import type {
+  TgChatMode,
+  TgChatType,
   TgClientStatus,
   TgClientSendCodeResult,
   TgClientSignInResult,
+  TgClientMessageInfo,
   TgMonitoredChat,
   TgDialogInfo,
   TgQrTokenResult,
   TgQrCheckResult,
 } from '../telegram-client.types';
+import { isTgChatMode, isTgChatType } from '../telegram-client.types';
 
 @UseGuards(AdminApiKeyGuard, RateLimitGuard)
 @Controller('telegram-client')
@@ -108,7 +112,7 @@ export class TelegramClientController {
   // ─── Messages (debug) ──────────────────────────────────────────────────
 
   @Get('messages/:chatId')
-  async getMessages(@Param('chatId') chatId: string): Promise<any[]> {
+  async getMessages(@Param('chatId') chatId: string): Promise<TgClientMessageInfo[]> {
     return this.clientService.getMessages(chatId, 10);
   }
 
@@ -132,11 +136,14 @@ export class TelegramClientController {
       throw new Error(`Chat ${body.chatId} is already monitored.`);
     }
 
+    const chatType = this.parseChatType(body.chatType, 'unknown');
+    const mode = this.parseChatMode(body.mode, 'auto');
+
     const chat = await this.repository.create({
       chatId: body.chatId.trim(),
       chatTitle: body.chatTitle || body.chatId,
-      chatType: (body.chatType as any) || 'unknown',
-      mode: (body.mode as any) || 'auto',
+      chatType,
+      mode,
       cooldownSeconds: body.cooldownSeconds,
       systemNote: body.systemNote,
     });
@@ -166,10 +173,13 @@ export class TelegramClientController {
     const existing = await this.repository.findById(id);
     if (!existing) return null;
 
+    const chatType = this.parseOptionalChatType(body.chatType);
+    const mode = this.parseOptionalChatMode(body.mode);
+
     await this.repository.update(id, {
       chatTitle: body.chatTitle,
-      chatType: body.chatType as any,
-      mode: body.mode as any,
+      chatType,
+      mode,
       cooldownSeconds: body.cooldownSeconds,
       systemNote: body.systemNote,
     });
@@ -181,5 +191,31 @@ export class TelegramClientController {
   async deleteChat(@Param('id') id: string): Promise<{ deleted: boolean }> {
     const deleted = await this.repository.delete(id);
     return { deleted };
+  }
+
+  private parseChatType(value: string | undefined, fallback: TgChatType): TgChatType {
+    if (!value) return fallback;
+    if (!isTgChatType(value)) {
+      throw new Error(`Invalid chatType: "${value}".`);
+    }
+    return value;
+  }
+
+  private parseOptionalChatType(value: string | undefined): TgChatType | undefined {
+    if (value === undefined) return undefined;
+    return this.parseChatType(value, 'unknown');
+  }
+
+  private parseChatMode(value: string | undefined, fallback: TgChatMode): TgChatMode {
+    if (!value) return fallback;
+    if (!isTgChatMode(value)) {
+      throw new Error(`Invalid mode: "${value}".`);
+    }
+    return value;
+  }
+
+  private parseOptionalChatMode(value: string | undefined): TgChatMode | undefined {
+    if (value === undefined) return undefined;
+    return this.parseChatMode(value, 'auto');
   }
 }

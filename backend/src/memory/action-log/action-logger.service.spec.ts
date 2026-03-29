@@ -1,8 +1,6 @@
-import type { EmbeddingService } from '../../embedding/embedding.service';
 import type { LlmService } from '../../llm/llm.service';
 import type { MemoryEntry } from '../core/memory-entry.types';
 import { MemoryStoreService } from '../core/memory-store.service';
-import type { QdrantVectorService } from '../qdrant/qdrant-vector.service';
 import { ActionLoggerService } from './action-logger.service';
 import type { ActionLogEntry } from './action-log.types';
 
@@ -38,15 +36,6 @@ const createMockStore = () => {
 const createMockLlm = (response: string) => ({
   complete: jest.fn().mockResolvedValue({ content: response }),
 }) as unknown as LlmService;
-
-const createMockEmbedding = () => ({
-  embed: jest.fn().mockResolvedValue({ embedding: [0.1, 0.2, 0.3], model: 'test', tokenCount: 5 }),
-}) as unknown as EmbeddingService;
-
-const createMockQdrant = () => ({
-  isReady: jest.fn().mockReturnValue(true),
-  upsertPoints: jest.fn().mockResolvedValue(undefined),
-}) as unknown as QdrantVectorService;
 
 const baseAction: ActionLogEntry = {
   toolName: 'web_search',

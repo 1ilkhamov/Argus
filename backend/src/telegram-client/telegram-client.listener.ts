@@ -26,6 +26,16 @@ interface QueuedMessage {
   messageId: number;
 }
 
+interface TelegramListenerMessage {
+  id: number;
+  message?: string | null;
+  date?: number;
+  senderId?: unknown;
+  peerId?: unknown;
+  replyTo?: unknown;
+  getSender?: () => Promise<unknown>;
+}
+
 @Injectable()
 export class TelegramClientListener implements OnModuleInit {
   private readonly logger = new Logger(TelegramClientListener.name);
@@ -48,7 +58,7 @@ export class TelegramClientListener implements OnModuleInit {
 
   onModuleInit(): void {
     // Register ourselves as the message handler before the client connects
-    this.clientService.setMessageHandler((event: any) => {
+    this.clientService.setMessageHandler((event: unknown) => {
       this.handleNewMessage(event).catch((err) => {
         this.logger.error(`Message handler error: ${err instanceof Error ? err.message : String(err)}`);
       });
@@ -58,8 +68,8 @@ export class TelegramClientListener implements OnModuleInit {
 
   // ─── Message handling ───────────────────────────────────────────────────
 
-  private async handleNewMessage(event: any): Promise<void> {
-    const message = event.message;
+  private async handleNewMessage(event: unknown): Promise<void> {
+    const message = this.extractEventMessage(event);
     if (!message || !message.message) return;
 
     // Ignore old messages (e.g. on reconnect)
@@ -71,7 +81,7 @@ export class TelegramClientListener implements OnModuleInit {
     const isOwnMessage = !!(myId && senderId === myId);
 
     // Resolve chat ID
-    const chatId = message.peerId ? this.resolveChatId(message.peerId) : null;
+    const chatId = this.resolveChatId(message.peerId);
     if (!chatId) return;
 
     // Check if this chat is monitored
@@ -93,7 +103,7 @@ export class TelegramClientListener implements OnModuleInit {
       senderName,
       text,
       isOutgoing: isOwnMessage,
-      replyToId: (message.replyTo as any)?.replyToMsgId,
+      replyToId: this.getReplyToMessageId(message.replyTo),
       timestamp: message.date ? new Date(message.date * 1000).toISOString() : new Date().toISOString(),
     }).catch((err) => {
       this.logger.warn(`Failed to persist message: ${err instanceof Error ? err.message : String(err)}`);
@@ -398,7 +408,7 @@ export class TelegramClientListener implements OnModuleInit {
    * - Group/supergroup: only if owner is mentioned, directly addressed, or it's a reply to owner's message
    * - Channel: never reply
    */
-  private async shouldReply(chat: TgMonitoredChat, chatId: string, text: string, message: any): Promise<boolean> {
+  private async shouldReply(chat: TgMonitoredChat, chatId: string, text: string, message: TelegramListenerMessage): Promise<boolean> {
     const chatType = chat.chatType;
 
     // Channels: never auto-reply
@@ -410,7 +420,7 @@ export class TelegramClientListener implements OnModuleInit {
     // Groups/supergroups: reply only when relevant
     if (chatType === 'group' || chatType === 'supergroup') {
       // Check if the message is a reply to one of owner's messages
-      const replyToMsgId = (message.replyTo as any)?.replyToMsgId;
+      const replyToMsgId = this.getReplyToMessageId(message.replyTo);
       if (replyToMsgId) {
         const recent = await this.messagesRepository.getRecent(chatId, 200);
         const repliedTo = recent.find((m) => m.tgMessageId === replyToMsgId);
@@ -459,7 +469,7 @@ export class TelegramClientListener implements OnModuleInit {
     this.chatQueueActive.set(chatId, true);
 
     try {
-      while (true) {
+      for (;;) {
         const queue = this.chatQueues.get(chatId);
         if (!queue || queue.length === 0) break;
 
@@ -472,7 +482,7 @@ export class TelegramClientListener implements OnModuleInit {
         if (elapsed < cooldownMs) {
           const waitMs = cooldownMs - elapsed;
           this.logger.debug(`Cooldown wait ${waitMs}ms for chat ${chatId}`);
-          await new Promise((r) => setTimeout(r, waitMs));
+          await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
         }
 
         await this.processAndReply(
@@ -491,23 +501,60 @@ export class TelegramClientListener implements OnModuleInit {
 
   // ─── Helpers ────────────────────────────────────────────────────────────
 
-  private resolveChatId(peerId: any): string | null {
+  private resolveChatId(peerId: unknown): string | null {
     if (peerId instanceof Api.PeerUser) return String(peerId.userId);
     if (peerId instanceof Api.PeerChat) return `-${peerId.chatId}`;
     if (peerId instanceof Api.PeerChannel) return `-100${peerId.channelId}`;
     return null;
   }
 
-  private async resolveSenderName(message: any): Promise<string> {
+  private async resolveSenderName(message: TelegramListenerMessage): Promise<string> {
     try {
-      const sender = await message.getSender();
+      const sender = typeof message.getSender === 'function' ? await message.getSender() : null;
       if (!sender) return 'Unknown';
       if (sender instanceof Api.User) {
         return [sender.firstName, sender.lastName].filter(Boolean).join(' ') || sender.username || 'Unknown';
       }
-      return (sender as any).title || 'Unknown';
+      if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
+        return sender.title || 'Unknown';
+      }
+      return 'Unknown';
     } catch {
       return 'Unknown';
     }
+  }
+
+  private extractEventMessage(event: unknown): TelegramListenerMessage | null {
+    if (!this.isRecord(event)) return null;
+    const candidate = event.message;
+    if (!this.isRecord(candidate)) return null;
+    const id = candidate.id;
+    if (typeof id !== 'number') return null;
+
+    const message = candidate.message;
+    const date = candidate.date;
+    const getSender = candidate.getSender;
+
+    return {
+      id,
+      message: typeof message === 'string' || message === null ? message : undefined,
+      date: typeof date === 'number' ? date : undefined,
+      senderId: candidate.senderId,
+      peerId: candidate.peerId,
+      replyTo: candidate.replyTo,
+      getSender: typeof getSender === 'function'
+        ? () => Promise.resolve(Reflect.apply(getSender, candidate, []))
+        : undefined,
+    };
+  }
+
+  private getReplyToMessageId(replyTo: unknown): number | undefined {
+    if (!this.isRecord(replyTo)) return undefined;
+    const replyToMsgId = replyTo.replyToMsgId;
+    return typeof replyToMsgId === 'number' ? replyToMsgId : undefined;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
   }
 }

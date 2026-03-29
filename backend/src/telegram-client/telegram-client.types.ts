@@ -23,7 +23,7 @@ export interface TgQrTokenResult {
 
 export interface TgQrCheckResult {
   status: 'waiting' | 'requires_2fa' | 'authorized' | 'expired';
-  user?: { id: string; firstName: string; username?: string };
+  user?: TgClientUser;
 }
 
 export interface TgClientSendCodeResult {
@@ -33,7 +33,13 @@ export interface TgClientSendCodeResult {
 export interface TgClientSignInResult {
   success: boolean;
   requires2FA?: boolean;
-  user?: { id: string; firstName: string; username?: string };
+  user?: TgClientUser;
+}
+
+export interface TgClientUser {
+  id: string;
+  firstName: string;
+  username?: string;
 }
 
 // ─── Status ───────────────────────────────────────────────────────────────────
@@ -41,7 +47,7 @@ export interface TgClientSignInResult {
 export interface TgClientStatus {
   connected: boolean;
   authorized: boolean;
-  user: { id: string; firstName: string; username?: string } | null;
+  user: TgClientUser | null;
   monitoredChats: number;
   authStep: TgClientAuthState['step'];
 }
@@ -91,6 +97,15 @@ export interface TgDialogInfo {
   type: 'user' | 'group' | 'supergroup' | 'channel' | 'unknown';
   unreadCount: number;
   lastMessageDate: string | null;
+}
+
+export interface TgClientMessageInfo {
+  id: number;
+  senderId: string;
+  senderName: string;
+  text: string;
+  date: string;
+  isOutgoing: boolean;
 }
 
 // ─── Incoming message (internal) ──────────────────────────────────────────────
@@ -154,3 +169,15 @@ export const TG_CLIENT_SETTINGS = {
   PHONE: 'telegram_client.phone',
   SESSION: 'telegram_client.session',
 } as const;
+
+export const TG_CHAT_MODES = ['auto', 'read_only', 'manual', 'disabled'] as const;
+
+export const TG_CHAT_TYPES = ['user', 'group', 'supergroup', 'channel', 'unknown'] as const;
+
+export function isTgChatMode(value: unknown): value is TgChatMode {
+  return typeof value === 'string' && TG_CHAT_MODES.includes(value as TgChatMode);
+}
+
+export function isTgChatType(value: unknown): value is TgChatType {
+  return typeof value === 'string' && TG_CHAT_TYPES.includes(value as TgChatType);
+}

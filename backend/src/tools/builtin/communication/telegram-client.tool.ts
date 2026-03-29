@@ -4,6 +4,8 @@ import { ToolRegistryService } from '../../core/registry/tool-registry.service';
 import type { Tool, ToolDefinition, ToolExecutionContext } from '../../core/tool.types';
 import { TelegramClientService } from '../../../telegram-client/telegram-client.service';
 import { TelegramClientRepository } from '../../../telegram-client/telegram-client.repository';
+import type { TgChatMode } from '../../../telegram-client/telegram-client.types';
+import { isTgChatMode } from '../../../telegram-client/telegram-client.types';
 
 @Injectable()
 export class TelegramClientTool implements Tool, OnModuleInit {
@@ -202,10 +204,12 @@ export class TelegramClientTool implements Tool, OnModuleInit {
       return `Chat ${chatId} ("${existing.chatTitle}") is already monitored (mode: ${existing.mode}).`;
     }
 
+    const mode = this.parseMode(args.mode, 'auto');
+
     const chat = await this.repository.create({
       chatId,
       chatTitle: String(args.chat_title ?? chatId),
-      mode: (args.mode as any) ?? 'auto',
+      mode,
       cooldownSeconds: args.cooldown ? Number(args.cooldown) : undefined,
       systemNote: args.system_note ? String(args.system_note) : undefined,
     });
@@ -220,8 +224,10 @@ export class TelegramClientTool implements Tool, OnModuleInit {
     const existing = await this.repository.findByChatId(chatId);
     if (!existing) return `Error: Chat ${chatId} is not monitored. Use add_monitored first.`;
 
+    const mode = args.mode === undefined ? undefined : this.parseMode(args.mode, 'auto');
+
     await this.repository.update(existing.id, {
-      mode: args.mode ? (args.mode as any) : undefined,
+      mode,
       cooldownSeconds: args.cooldown ? Number(args.cooldown) : undefined,
       systemNote: args.system_note !== undefined ? String(args.system_note) : undefined,
       chatTitle: args.chat_title ? String(args.chat_title) : undefined,
@@ -239,5 +245,17 @@ export class TelegramClientTool implements Tool, OnModuleInit {
 
     await this.repository.delete(existing.id);
     return `Chat "${existing.chatTitle}" removed from monitoring.`;
+  }
+
+  private parseMode(value: unknown, fallback: TgChatMode): TgChatMode {
+    if (value === undefined || value === null || value === '') {
+      return fallback;
+    }
+
+    if (!isTgChatMode(value)) {
+      throw new Error(`Invalid monitoring mode: "${String(value)}".`);
+    }
+
+    return value;
   }
 }

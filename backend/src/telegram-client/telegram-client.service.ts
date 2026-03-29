@@ -8,9 +8,11 @@ import { SettingsService } from '../settings/settings.service';
 import type {
   TelegramClientConfig,
   TgClientAuthState,
+  TgClientMessageInfo,
   TgClientSendCodeResult,
   TgClientSignInResult,
   TgClientStatus,
+  TgClientUser,
   TgDialogInfo,
   TgQrTokenResult,
   TgQrCheckResult,
@@ -20,16 +22,30 @@ import { TG_CLIENT_SETTINGS } from './telegram-client.types';
 import { TelegramClientRepository } from './telegram-client.repository';
 import { TelegramClientMessagesRepository } from './telegram-client-messages.repository';
 
+type TelegramHistoryMessage = {
+  id: number;
+  message?: string | null;
+  senderId?: unknown;
+  out?: boolean;
+  date?: number;
+  replyTo?: unknown;
+  getSender?: () => Promise<unknown>;
+};
+
+type SwitchableTelegramClient = TelegramClient & {
+  _switchDC?: (dcId: number) => Promise<void>;
+};
+
 @Injectable()
 export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramClientService.name);
   private client: TelegramClient | null = null;
   private authState: TgClientAuthState = { step: 'idle' };
-  private currentUser: { id: string; firstName: string; username?: string } | null = null;
+  private currentUser: TgClientUser | null = null;
   private readonly config: TelegramClientConfig;
 
   /** Listeners set by TelegramClientListener */
-  private messageHandler?: (event: any) => void;
+  private messageHandler?: (event: unknown) => void;
 
   constructor(
     private readonly configService: ConfigService,
@@ -75,7 +91,7 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
     return this.currentUser?.id ?? null;
   }
 
-  getCurrentUser(): { id: string; firstName: string; username?: string } | null {
+  getCurrentUser(): TgClientUser | null {
     return this.currentUser;
   }
 
@@ -90,7 +106,7 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  setMessageHandler(handler: (event: any) => void): void {
+  setMessageHandler(handler: (event: unknown) => void): void {
     this.messageHandler = handler;
   }
 
@@ -122,8 +138,12 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
       }),
     );
 
-    const phoneCodeHash = (result as any).phoneCodeHash as string;
-    const codeType = (result as any).type?.className ?? 'unknown';
+    if (!(result instanceof Api.auth.SentCode)) {
+      throw new Error('Unexpected response from Telegram while sending auth code.');
+    }
+
+    const phoneCodeHash = result.phoneCodeHash;
+    const codeType = result.type.className;
 
     this.authState = {
       step: 'awaiting_code',
@@ -153,8 +173,12 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
       }),
     );
 
-    const phoneCodeHash = (result as any).phoneCodeHash as string;
-    const codeType = (result as any).type?.className ?? 'unknown';
+    if (!(result instanceof Api.auth.SentCode)) {
+      throw new Error('Unexpected response from Telegram while resending auth code.');
+    }
+
+    const phoneCodeHash = result.phoneCodeHash;
+    const codeType = result.type?.className ?? 'unknown';
 
     this.authState = {
       step: 'awaiting_code',
@@ -192,9 +216,9 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
       }),
     );
 
-    if (result.className === 'auth.LoginTokenMigrateTo') {
-      this.logger.log(`QR: migrating to DC ${(result as any).dcId}`);
-      await (this.client as any)._switchDC((result as any).dcId);
+    if (result instanceof Api.auth.LoginTokenMigrateTo) {
+      this.logger.log(`QR: migrating to DC ${result.dcId}`);
+      await this.switchClientDc(result.dcId);
 
       const migrated = await this.client.invoke(
         new Api.auth.ExportLoginToken({
@@ -204,25 +228,29 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
         }),
       );
 
-      if (migrated.className === 'auth.LoginToken') {
-        const token = Buffer.from((migrated as any).token).toString('base64url');
-        const expiresIn = (migrated as any).expires - Math.floor(Date.now() / 1000);
+      if (migrated instanceof Api.auth.LoginToken) {
         this.authState = { step: 'awaiting_qr' };
         this.logger.log('QR token generated (after DC migration)');
-        return { qrUrl: `tg://login?token=${token}`, expiresIn };
+        return this.buildQrToken(migrated);
+      }
+
+      if (migrated instanceof Api.auth.LoginTokenSuccess) {
+        const user = this.extractAuthorizedUser(migrated);
+        if (user) {
+          await this.finalizeAuth(user);
+        }
+        return { qrUrl: '', expiresIn: 0 };
       }
     }
 
-    if (result.className === 'auth.LoginToken') {
-      const token = Buffer.from((result as any).token).toString('base64url');
-      const expiresIn = (result as any).expires - Math.floor(Date.now() / 1000);
+    if (result instanceof Api.auth.LoginToken) {
       this.authState = { step: 'awaiting_qr' };
       this.logger.log('QR token generated');
-      return { qrUrl: `tg://login?token=${token}`, expiresIn };
+      return this.buildQrToken(result);
     }
 
-    if (result.className === 'auth.LoginTokenSuccess') {
-      const user = (result as any).authorization?.user;
+    if (result instanceof Api.auth.LoginTokenSuccess) {
+      const user = this.extractAuthorizedUser(result);
       if (user) await this.finalizeAuth(user);
       return { qrUrl: '', expiresIn: 0 };
     }
@@ -252,21 +280,21 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
         }),
       );
 
-      if (result.className === 'auth.LoginTokenSuccess') {
-        const user = (result as any).authorization?.user;
+      if (result instanceof Api.auth.LoginTokenSuccess) {
+        const user = this.extractAuthorizedUser(result);
         if (user) {
           const finalResult = await this.finalizeAuth(user);
           return { status: 'authorized', user: finalResult.user };
         }
       }
 
-      if (result.className === 'auth.LoginTokenMigrateTo') {
-        await (this.client as any)._switchDC((result as any).dcId);
+      if (result instanceof Api.auth.LoginTokenMigrateTo) {
+        await this.switchClientDc(result.dcId);
         const imported = await this.client.invoke(
-          new Api.auth.ImportLoginToken({ token: (result as any).token }),
+          new Api.auth.ImportLoginToken({ token: result.token }),
         );
-        if (imported.className === 'auth.LoginTokenSuccess') {
-          const user = (imported as any).authorization?.user;
+        if (imported instanceof Api.auth.LoginTokenSuccess) {
+          const user = this.extractAuthorizedUser(imported);
           if (user) {
             const finalResult = await this.finalizeAuth(user);
             return { status: 'authorized', user: finalResult.user };
@@ -275,12 +303,13 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
       }
 
       return { status: 'waiting' };
-    } catch (err: any) {
-      if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+    } catch (err) {
+      const errorMessage = this.getTelegramErrorMessage(err);
+      if (errorMessage === 'SESSION_PASSWORD_NEEDED') {
         this.authState = { step: 'awaiting_2fa' };
         return { status: 'requires_2fa' };
       }
-      if (err.errorMessage === 'AUTH_TOKEN_EXPIRED') {
+      if (errorMessage === 'AUTH_TOKEN_EXPIRED') {
         return { status: 'expired' };
       }
       throw err;
@@ -301,11 +330,18 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
         }),
       );
 
-      // Success
-      const user = (result as any).user;
+      if (!(result instanceof Api.auth.Authorization)) {
+        throw new Error('Unexpected response from Telegram during sign-in.');
+      }
+
+      const user = this.extractAuthorizedUser(result);
+      if (!user) {
+        throw new Error('Telegram sign-in succeeded without returning a user.');
+      }
+
       return this.finalizeAuth(user);
-    } catch (err: any) {
-      if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+    } catch (err) {
+      if (this.getTelegramErrorMessage(err) === 'SESSION_PASSWORD_NEEDED') {
         this.authState = { ...this.authState, step: 'awaiting_2fa' };
         return { success: false, requires2FA: true };
       }
@@ -333,7 +369,15 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
       new Api.auth.CheckPassword({ password: srpPassword }),
     );
 
-    const user = (authResult as any).user;
+    if (!(authResult instanceof Api.auth.Authorization)) {
+      throw new Error('Unexpected response from Telegram during 2FA sign-in.');
+    }
+
+    const user = this.extractAuthorizedUser(authResult);
+    if (!user) {
+      throw new Error('Telegram 2FA succeeded without returning a user.');
+    }
+
     return this.finalizeAuth(user);
   }
 
@@ -356,23 +400,16 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
     await this.client.connect();
 
     // Verify authorization
-    const me = await this.client.getMe() as any;
-    if (!me) {
+    const me = await this.client.getMe();
+    if (!(me instanceof Api.User)) {
       throw new Error('Client connected but not authorized. Run auth flow.');
     }
 
-    this.currentUser = {
-      id: String(me.id),
-      firstName: me.firstName || '',
-      username: me.username || undefined,
-    };
+    this.currentUser = this.toClientUser(me);
     this.authState = { step: 'authorized' };
 
     // Register message handler if set
-    if (this.messageHandler) {
-      const { NewMessage } = await import('telegram/events');
-      this.client.addEventHandler(this.messageHandler, new NewMessage({}));
-    }
+    await this.registerMessageHandler();
 
     this.logger.log(`Connected as ${this.currentUser.firstName} (@${this.currentUser.username || 'N/A'})`);
   }
@@ -420,12 +457,12 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
       if (entity instanceof Api.User) type = 'user';
       else if (entity instanceof Api.Chat) type = 'group';
       else if (entity instanceof Api.Channel) {
-        type = (entity as any).megagroup ? 'supergroup' : 'channel';
+        type = entity.megagroup ? 'supergroup' : 'channel';
       }
 
       result.push({
         chatId: String(dialog.id),
-        title: dialog.title || (entity instanceof Api.User ? `${(entity as any).firstName || ''} ${(entity as any).lastName || ''}`.trim() : ''),
+        title: dialog.title || (entity instanceof Api.User ? [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim() : ''),
         type,
         unreadCount: dialog.unreadCount,
         lastMessageDate: dialog.date ? new Date(dialog.date * 1000).toISOString() : null,
@@ -453,14 +490,7 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Read messages ──────────────────────────────────────────────────────
 
-  async getMessages(chatId: string, limit = 20): Promise<Array<{
-    id: number;
-    senderId: string;
-    senderName: string;
-    text: string;
-    date: string;
-    isOutgoing: boolean;
-  }>> {
+  async getMessages(chatId: string, limit = 20): Promise<TgClientMessageInfo[]> {
     if (!this.client || !this.isConnected()) {
       throw new Error('Telegram client is not connected.');
     }
@@ -468,16 +498,13 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
     const peer = await this.resolvePeer(chatId);
     const messages = await this.client.getMessages(peer, { limit });
 
-    return messages
-      .filter((m) => m.message)
-      .map((m) => ({
-        id: m.id,
-        senderId: m.senderId ? String(m.senderId) : '',
-        senderName: (m as any)._sender?.firstName || (m as any)._sender?.title || '',
-        text: m.message || '',
-        date: m.date ? new Date(m.date * 1000).toISOString() : '',
-        isOutgoing: m.out ?? false,
-      }));
+    const result: TgClientMessageInfo[] = [];
+    for (const message of messages) {
+      if (!message.message) continue;
+      result.push(await this.toMessageInfo(message));
+    }
+
+    return result;
   }
 
   // ─── Message sync ──────────────────────────────────────────────────────
@@ -503,18 +530,11 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
       const peer = await this.resolvePeer(chatId);
       const messages = await this.client.getMessages(peer, { limit });
 
-      const toStore: CreateStoredMessageParams[] = messages
-        .filter((m) => m.message)
-        .map((m) => ({
-          chatId,
-          tgMessageId: m.id,
-          senderId: m.senderId ? String(m.senderId) : '',
-          senderName: (m as any)._sender?.firstName || (m as any)._sender?.title || '',
-          text: m.message || '',
-          isOutgoing: m.out ?? false,
-          replyToId: (m.replyTo as any)?.replyToMsgId,
-          timestamp: m.date ? new Date(m.date * 1000).toISOString() : new Date().toISOString(),
-        }));
+      const toStore: CreateStoredMessageParams[] = [];
+      for (const message of messages) {
+        if (!message.message) continue;
+        toStore.push(await this.toStoredMessageParams(chatId, message));
+      }
 
       const inserted = await this.messagesRepository.saveBulk(toStore);
       this.logger.log(`Synced ${inserted} messages for chat ${chatId}`);
@@ -537,12 +557,8 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async finalizeAuth(user: any): Promise<TgClientSignInResult> {
-    this.currentUser = {
-      id: String(user.id),
-      firstName: user.firstName || '',
-      username: user.username || undefined,
-    };
+  private async finalizeAuth(user: Api.User): Promise<TgClientSignInResult> {
+    this.currentUser = this.toClientUser(user);
     this.authState = { step: 'authorized' };
 
     // Save session string
@@ -550,13 +566,111 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
     await this.settingsService.set(TG_CLIENT_SETTINGS.SESSION, sessionString);
 
     // Register message handler
-    if (this.messageHandler) {
-      const { NewMessage } = await import('telegram/events');
-      this.client!.addEventHandler(this.messageHandler, new NewMessage({}));
-    }
+    await this.registerMessageHandler();
 
     this.logger.log(`Authorized as ${this.currentUser.firstName} (@${this.currentUser.username || 'N/A'})`);
     return { success: true, user: this.currentUser };
+  }
+
+  private async registerMessageHandler(): Promise<void> {
+    if (!this.client || !this.messageHandler) return;
+    const { NewMessage } = await import('telegram/events');
+    this.client.addEventHandler(this.messageHandler, new NewMessage({}));
+  }
+
+  private toClientUser(user: Api.User): TgClientUser {
+    return {
+      id: String(user.id),
+      firstName: user.firstName || '',
+      username: user.username || undefined,
+    };
+  }
+
+  private async switchClientDc(dcId: number): Promise<void> {
+    const client = this.client as SwitchableTelegramClient | null;
+    if (!client?._switchDC) {
+      throw new Error('Telegram client cannot switch data centers during QR auth.');
+    }
+    await client._switchDC(dcId);
+  }
+
+  private buildQrToken(result: Api.auth.LoginToken): TgQrTokenResult {
+    const token = Buffer.from(result.token).toString('base64url');
+    const expiresIn = Number(result.expires) - Math.floor(Date.now() / 1000);
+    return { qrUrl: `tg://login?token=${token}`, expiresIn };
+  }
+
+  private extractAuthorizedUser(result: Api.auth.Authorization | Api.auth.LoginTokenSuccess): Api.User | null {
+    if (result instanceof Api.auth.LoginTokenSuccess) {
+      const authorization = result.authorization;
+      if (!(authorization instanceof Api.auth.Authorization)) {
+        return null;
+      }
+      return authorization.user instanceof Api.User ? authorization.user : null;
+    }
+
+    return result.user instanceof Api.User ? result.user : null;
+  }
+
+  private async toMessageInfo(message: TelegramHistoryMessage): Promise<TgClientMessageInfo> {
+    const senderName = await this.resolveMessageSenderName(message);
+    return {
+      id: message.id,
+      senderId: message.senderId ? String(message.senderId) : '',
+      senderName,
+      text: message.message ?? '',
+      date: typeof message.date === 'number' ? new Date(message.date * 1000).toISOString() : '',
+      isOutgoing: message.out === true,
+    };
+  }
+
+  private async toStoredMessageParams(chatId: string, message: TelegramHistoryMessage): Promise<CreateStoredMessageParams> {
+    const info = await this.toMessageInfo(message);
+    return {
+      chatId,
+      tgMessageId: info.id,
+      senderId: info.senderId,
+      senderName: info.senderName,
+      text: info.text,
+      isOutgoing: info.isOutgoing,
+      replyToId: this.getReplyToMessageId(message.replyTo),
+      timestamp: info.date || new Date().toISOString(),
+    };
+  }
+
+  private async resolveMessageSenderName(message: TelegramHistoryMessage): Promise<string> {
+    try {
+      const sender = typeof message.getSender === 'function' ? await message.getSender() : null;
+      return this.getSenderDisplayName(sender);
+    } catch {
+      return 'Unknown';
+    }
+  }
+
+  private getSenderDisplayName(sender: unknown): string {
+    if (sender instanceof Api.User) {
+      return [sender.firstName, sender.lastName].filter(Boolean).join(' ').trim() || sender.username || 'Unknown';
+    }
+    if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
+      return sender.title || 'Unknown';
+    }
+    return 'Unknown';
+  }
+
+  private getReplyToMessageId(replyTo: unknown): number | undefined {
+    if (!this.isRecord(replyTo)) return undefined;
+    const replyToMsgId = replyTo.replyToMsgId;
+    return typeof replyToMsgId === 'number' ? replyToMsgId : undefined;
+  }
+
+  private getTelegramErrorMessage(error: unknown): string | null {
+    if (!this.isRecord(error)) return null;
+    const errorMessage = error.errorMessage;
+    return typeof errorMessage === 'string' ? errorMessage : null;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
   }
 
   private async resolvePeer(chatId: string): Promise<Api.TypeEntityLike> {
