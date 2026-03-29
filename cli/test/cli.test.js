@@ -76,7 +76,7 @@ test('runCli returns 1 and reports unknown commands', async (t) => {
   const exitCode = await runCli(['unknown']);
 
   assert.equal(exitCode, 1);
-  assert.equal(failureMessage, 'Unknown command: unknown');
+  assert.equal(failureMessage, 'Unknown command: unknown\nRun argus-one --help to see available commands.');
 });
 
 test('runDoctor recommends onboarding and start when env files, dependencies, and services are missing', async (t) => {
