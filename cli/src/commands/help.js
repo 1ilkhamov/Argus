@@ -4,11 +4,13 @@ function runHelp() {
   logCliHeader('✨', 'Argus CLI', 'A polished local setup, readiness, and launch assistant for your workspace.');
   logCliFlowStart('Argus overview');
   logStepList(
-    'Published CLI',
+    'Quick start on a new machine',
     [
-      'npx argus-one onboard',
-      'npx argus-one doctor',
-      'npx argus-one start',
+      'npm install -g argus-one',
+      'argus-one init',
+      'cd Argus',
+      'argus-one onboard',
+      'argus-one start',
     ],
     { tone: 'green' },
   );
@@ -25,6 +27,7 @@ function runHelp() {
   logCommandList(
     'Commands',
     [
+      { name: 'argus-one init', description: 'Clone the Argus repository into a new workspace on this machine' },
       { name: 'argus-one onboard', description: 'Prepare env files, dependencies, and local runtime defaults' },
       { name: 'argus-one doctor', description: 'Check readiness, service status, and live endpoints' },
       { name: 'argus-one start', description: 'Launch backend and frontend together from the current Argus workspace' },

@@ -26,16 +26,14 @@
 
 ## Быстрый старт (TL;DR)
 
-### Рекомендуемый быстрый старт
-
-Склонируйте репозиторий и запускайте опубликованный CLI из корня Argus repo:
+### Рекомендуемый быстрый старт на новой машине
 
 ```bash
-git clone https://github.com/1ilkhamov/Argus.git
+npm install -g argus-one
+argus-one init
 cd Argus
-npx argus-one onboard
-npx argus-one doctor
-npx argus-one start
+argus-one onboard
+argus-one start
 ```
 
 ### Альтернатива для локальной разработки из репозитория
@@ -198,12 +196,20 @@ Argus/
 
 ### Рекомендуемый workflow через опубликованный CLI
 
-Запускайте из корня Argus repo или любой вложенной директории:
+```bash
+npm install -g argus-one
+argus-one init          # клонирует репозиторий Argus в ./Argus
+cd Argus
+argus-one onboard
+argus-one doctor
+argus-one start
+```
 
-- `npx argus-one onboard`
-- `npx argus-one doctor`
-- `npx argus-one start`
-- `npx argus-one --help`
+- `argus-one init [--dir=<name>]`
+- `argus-one onboard`
+- `argus-one doctor`
+- `argus-one start`
+- `argus-one --help`
 
 ### Альтернативный workflow из репозитория
 

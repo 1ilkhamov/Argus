@@ -3,6 +3,7 @@ const { runHelp } = require('./commands/help');
 const { runDoctor } = require('./commands/doctor');
 const { runStart } = require('./commands/start');
 const { runOnboard } = require('./commands/onboard');
+const { runInit } = require('./commands/init');
 
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
@@ -10,6 +11,13 @@ async function runCli(argv = process.argv.slice(2)) {
 
   if (!command || command === '--help' || command === '-h' || command === 'help') {
     runHelp();
+    return 0;
+  }
+
+  if (command === 'init') {
+    const dirFlag = argv.find((a) => a.startsWith('--dir='));
+    const dir = dirFlag ? dirFlag.slice('--dir='.length) : undefined;
+    await runInit({ dir });
     return 0;
   }
 
@@ -28,7 +36,7 @@ async function runCli(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  fail(`Unknown command: ${command}`);
+  fail(`Unknown command: ${command}\nRun argus-one --help to see available commands.`);
   return 1;
 }
 
