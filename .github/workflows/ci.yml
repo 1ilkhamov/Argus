@@ -110,8 +110,8 @@ jobs:
 
       - name: Smoke — public health endpoint
         run: |
-          status=$(curl -sf -o /dev/null -w '%{http_code}' http://localhost:2901/api/health)
-          [ "$status" = "200" ] || { echo "FAIL: GET /api/health returned $status"; exit 1; }
+          http_status=$(curl -sf -o /dev/null -w '%{http_code}' http://localhost:2901/api/health)
+          [ "$http_status" = "200" ] || { echo "FAIL: GET /api/health returned $http_status"; exit 1; }
           echo "PASS: GET /api/health -> 200"
 
       - name: Smoke — stop unauthenticated backend
@@ -144,20 +144,20 @@ jobs:
 
       - name: Smoke — unauthenticated chat rejected when auth on
         run: |
-          status=$(curl -sf -o /dev/null -w '%{http_code}' http://localhost:2901/api/chat/conversations 2>/dev/null || echo "000")
-          [ "$status" = "401" ] || { echo "FAIL: expected 401, got $status"; exit 1; }
+          http_status=$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:2901/api/chat/conversations 2>/dev/null || true)
+          [ "$http_status" = "401" ] || { echo "FAIL: expected 401, got $http_status"; exit 1; }
           echo "PASS: unauthenticated request -> 401"
 
       - name: Smoke — authenticated chat works with API key
         run: |
-          status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
-          [ "$status" = "200" ] || { echo "FAIL: expected 200, got $status"; exit 1; }
+          http_status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
+          [ "$http_status" = "200" ] || { echo "FAIL: expected 200, got $http_status"; exit 1; }
           echo "PASS: authenticated request -> 200"
 
       - name: Smoke — conversations list (auth on)
         run: |
-          status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
-          [ "$status" = "200" ] || { echo "FAIL: GET /api/chat/conversations returned $status"; exit 1; }
+          http_status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
+          [ "$http_status" = "200" ] || { echo "FAIL: GET /api/chat/conversations returned $http_status"; exit 1; }
           echo "PASS: GET /api/chat/conversations -> 200"
 
       - name: Smoke — create conversation via message (auth on)
@@ -167,6 +167,6 @@ jobs:
             -H 'X-API-Key: smoke-test-key' \
             -d '{"content":"smoke test ping"}' \
             -w '\n%{http_code}')
-          status=$(echo "$response" | tail -1)
-          [ "$status" = "200" ] || { echo "FAIL: POST /api/chat/messages returned $status"; echo "$response"; exit 1; }
+          http_status=$(echo "$response" | tail -1)
+          [ "$http_status" = "200" ] || { echo "FAIL: POST /api/chat/messages returned $http_status"; echo "$response"; exit 1; }
           echo "PASS: POST /api/chat/messages -> 200"
