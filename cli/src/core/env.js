@@ -9,6 +9,8 @@ const {
   frontendExampleEnvPath,
   MIN_NODE_MAJOR,
   DEFAULT_BACKEND_PORT,
+  workspaceSearchStart,
+  workspaceRootDetected,
 } = require('./constants');
 const { fail } = require('../ui/render');
 
@@ -34,6 +36,16 @@ function validateNodeVersion() {
   if (Number.isNaN(currentMajor) || currentMajor < MIN_NODE_MAJOR) {
     fail(`Argus requires Node.js >= ${MIN_NODE_MAJOR}. Current version: ${process.versions.node}`);
   }
+}
+
+function ensureArgusWorkspace() {
+  if (workspaceRootDetected) {
+    return;
+  }
+
+  fail(
+    `Argus workspace not found from ${workspaceSearchStart}. Run this command from the Argus repo root or one of its subdirectories.`,
+  );
 }
 
 function parseEnvFile(filePath) {
@@ -118,6 +130,7 @@ module.exports = {
   ensureDirectoryExists,
   ensureFileExists,
   validateNodeVersion,
+  ensureArgusWorkspace,
   parseEnvFile,
   writeEnvFile,
   formatEnvValue,

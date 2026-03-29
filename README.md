@@ -26,6 +26,20 @@
 
 ## Быстрый старт (TL;DR)
 
+### Рекомендуемый быстрый старт
+
+Склонируйте репозиторий и запускайте опубликованный CLI из корня Argus repo:
+
+```bash
+git clone https://github.com/1ilkhamov/Argus.git
+cd Argus
+npx argus-one onboard
+npx argus-one doctor
+npx argus-one start
+```
+
+### Альтернатива для локальной разработки из репозитория
+
 ```bash
 npm install
 npm run onboard
@@ -182,7 +196,16 @@ Argus/
 
 ## Root CLI workflow
 
-### Команды
+### Рекомендуемый workflow через опубликованный CLI
+
+Запускайте из корня Argus repo или любой вложенной директории:
+
+- `npx argus-one onboard`
+- `npx argus-one doctor`
+- `npx argus-one start`
+- `npx argus-one --help`
+
+### Альтернативный workflow из репозитория
 
 - `npm run onboard`
 - `npm run doctor`
@@ -190,7 +213,7 @@ Argus/
 - `npm run help`
 - `npm run verify`
 
-### Что делает `npm run onboard`
+### Что делает `onboard`
 
 - создаёт или обновляет `backend/.env` и `frontend/.env`
 - валидирует локальное окружение
@@ -198,7 +221,7 @@ Argus/
 - устанавливает зависимости, если это нужно
 - может подготовить workspace для опционального использования Qdrant
 
-### Что делает `npm run doctor`
+### Что делает `doctor`
 
 - проверяет версию Node.js
 - проверяет наличие env-файлов
@@ -206,7 +229,7 @@ Argus/
 - проверяет занятость портов frontend и backend
 - проверяет доступность сервисов, если они уже запущены
 
-### Что делает `npm run start`
+### Что делает `start`
 
 - запускает Qdrant, если он установлен и ещё не работает
 - запускает backend, если он ещё не работает

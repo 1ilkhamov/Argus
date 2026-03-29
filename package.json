@@ -26,9 +26,12 @@
     "argus-one": "cli/bin/argus-one.js"
   },
   "files": [
-    "cli",
-    "backend",
-    "frontend",
+    "cli/bin/argus-one.js",
+    "cli/src/index.js",
+    "cli/src/commands",
+    "cli/src/core",
+    "cli/src/services",
+    "cli/src/ui",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -40,10 +43,11 @@
     "docker-compose.yml"
   ],
   "scripts": {
-    "onboard": "node cli/bin/argus-one.js onboard",
-    "doctor": "node cli/bin/argus-one.js doctor",
-    "start": "node cli/bin/argus-one.js start",
-    "help": "node cli/bin/argus-one.js --help",
+    "onboard": "npm exec argus-one -- onboard",
+    "doctor": "npm exec argus-one -- doctor",
+    "start": "npm exec argus-one -- start",
+    "help": "npm exec argus-one -- --help",
+    "pack:dry-run": "npm pack --dry-run",
     "test:cli": "node --test cli/test/**/*.test.js",
     "test:backend": "npm test --prefix backend -- --runInBand",
     "test:backend:e2e": "npm run test:e2e --prefix backend -- --runInBand",

@@ -2,7 +2,17 @@
 
 ## Recommended local workflow
 
-From the project root:
+Recommended quick start after cloning the Argus repository:
+
+```bash
+git clone https://github.com/1ilkhamov/Argus.git
+cd Argus
+npx argus-one onboard
+npx argus-one doctor
+npx argus-one start
+```
+
+Alternative repo development workflow from the project root:
 
 ```bash
 npm install
@@ -11,7 +21,14 @@ npm run doctor
 npm run start
 ```
 
-Root CLI commands come from `package.json` and `cli/`:
+Recommended published CLI commands from the Argus repo root or any nested directory:
+
+- `npx argus-one onboard`
+- `npx argus-one doctor`
+- `npx argus-one start`
+- `npx argus-one --help`
+
+Alternative root CLI commands from `package.json` and `cli/`:
 
 - `npm run onboard`
 - `npm run doctor`
@@ -21,7 +38,7 @@ Root CLI commands come from `package.json` and `cli/`:
 
 ## What the root CLI does
 
-### `npm run onboard`
+### `onboard`
 
 The onboarding flow:
 
@@ -31,7 +48,7 @@ The onboarding flow:
 - configures the LLM provider flow
 - can prepare the workspace for optional Qdrant usage
 
-### `npm run doctor`
+### `doctor`
 
 The doctor flow checks:
 
@@ -41,7 +58,7 @@ The doctor flow checks:
 - frontend and backend port status
 - service reachability when already running
 
-### `npm run start`
+### `start`
 
 The start flow:
 

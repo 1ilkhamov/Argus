@@ -19,6 +19,7 @@ const {
   ensureDirectoryExists,
   ensureFileExists,
   validateNodeVersion,
+  ensureArgusWorkspace,
   readBackendConfig,
   writeEnvFile,
 } = require('../core/env');
@@ -613,6 +614,7 @@ async function buildOnboardingConfig(flags = new Set()) {
 
 async function runOnboard({ flags = new Set() } = {}) {
   validateNodeVersion();
+  ensureArgusWorkspace();
   ensureDirectoryExists(backendDir);
   ensureDirectoryExists(frontendDir);
   ensureFileExists(path.join(backendDir, 'package.json'));

@@ -14,6 +14,8 @@ build/
 backend/data/
 backend/tmp/
 bin/
+!cli/bin/
+!cli/bin/**
 
 # IDE
 .vscode/

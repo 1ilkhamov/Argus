@@ -1,6 +1,37 @@
+const fs = require('node:fs');
 const path = require('node:path');
 
-const repoRoot = path.resolve(__dirname, '../../..');
+function isArgusWorkspaceRoot(directoryPath) {
+  return [
+    path.join(directoryPath, 'package.json'),
+    path.join(directoryPath, 'backend', 'package.json'),
+    path.join(directoryPath, 'frontend', 'package.json'),
+    path.join(directoryPath, 'backend', '.env.example'),
+    path.join(directoryPath, 'frontend', '.env.example'),
+  ].every((candidatePath) => fs.existsSync(candidatePath));
+}
+
+function findArgusWorkspaceRoot(startDir) {
+  let currentDir = path.resolve(startDir);
+
+  while (true) {
+    if (isArgusWorkspaceRoot(currentDir)) {
+      return currentDir;
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return null;
+    }
+
+    currentDir = parentDir;
+  }
+}
+
+const workspaceSearchStart = process.cwd();
+const detectedWorkspaceRoot = findArgusWorkspaceRoot(workspaceSearchStart);
+const workspaceRootDetected = detectedWorkspaceRoot !== null;
+const repoRoot = detectedWorkspaceRoot || workspaceSearchStart;
 const backendDir = path.join(repoRoot, 'backend');
 const frontendDir = path.join(repoRoot, 'frontend');
 const backendEnvPath = path.join(backendDir, '.env');
@@ -89,12 +120,16 @@ const ANSI = {
 
 module.exports = {
   repoRoot,
+  workspaceSearchStart,
+  workspaceRootDetected,
   backendDir,
   frontendDir,
   backendEnvPath,
   frontendEnvPath,
   backendExampleEnvPath,
   frontendExampleEnvPath,
+  isArgusWorkspaceRoot,
+  findArgusWorkspaceRoot,
   MIN_NODE_MAJOR,
   DEFAULT_BACKEND_PORT,
   DEFAULT_FRONTEND_PORT,
