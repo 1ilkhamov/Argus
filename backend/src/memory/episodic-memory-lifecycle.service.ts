@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { Conversation } from '../chat/entities/conversation.entity';
-import { ensureStructuredMemoryProvenance, mergeStructuredMemoryProvenance } from './structured-memory-metadata';
+import { mergeStructuredMemoryProvenance } from './structured-memory-metadata';
 import type {
   EpisodicMemoryEntry,
   EpisodicMemoryEntryRevision,
