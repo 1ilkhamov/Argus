@@ -2,11 +2,18 @@ import { ConfigService } from '@nestjs/config';
 
 import { AuthService } from './auth.service';
 
-const createRequest = (headers: Record<string, string> = {}, path = '/api/chat/messages') =>
+const createRequest = (
+  headers: Record<string, string> = {},
+  path = '/api/chat/messages',
+  overrides: Partial<import('express').Request> = {},
+) =>
   ({
     header: (name: string) => headers[name.toLowerCase()],
     path,
     url: path,
+    originalUrl: path,
+    baseUrl: '',
+    ...overrides,
   }) as unknown as import('express').Request;
 
 const createResponse = () => ({
@@ -134,6 +141,22 @@ describe('AuthService', () => {
         sameSite: 'lax',
         secure: false,
       });
+    });
+
+    it('issues a public-session cookie when Nest exposes a mounted route path', () => {
+      const response = createResponse();
+      const identity = service.resolveIdentity(
+        createRequest({}, '/conversations', {
+          originalUrl: '/api/chat/conversations',
+          baseUrl: '/api/chat',
+          url: '/conversations',
+        }),
+        response,
+      );
+
+      expect(identity.authenticated).toBe(true);
+      expect(identity.authType).toBe('public_session');
+      expect(response.cookie).toHaveBeenCalledTimes(1);
     });
 
     it('reuses a valid public-session cookie without issuing a new one', () => {

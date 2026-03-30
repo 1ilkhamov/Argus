@@ -141,11 +141,33 @@ export class AuthService {
   }
 
   private isPublicSessionEligiblePath(request: Request): boolean {
-    const path = request.path || request.url || '';
-    return path.startsWith('/api/chat')
-      || path.startsWith('/chat')
-      || path.startsWith('/api/memory/v2')
-      || path.startsWith('/memory/v2');
+    const rawCandidatePaths: string[] = [
+      request.originalUrl ?? '',
+      request.url ?? '',
+      `${request.baseUrl || ''}${request.path || ''}`,
+      request.path ?? '',
+    ];
+
+    const candidatePaths = new Set<string>();
+    for (const rawPath of rawCandidatePaths) {
+      const normalizedPath = rawPath.split('?')[0];
+      if (normalizedPath) {
+        candidatePaths.add(normalizedPath);
+      }
+    }
+
+    for (const path of candidatePaths) {
+      if (
+        path.startsWith('/api/chat')
+        || path.startsWith('/chat')
+        || path.startsWith('/api/memory/v2')
+        || path.startsWith('/memory/v2')
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private extractCookie(request: Request, cookieName: string): string | undefined {

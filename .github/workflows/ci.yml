@@ -91,7 +91,7 @@ jobs:
       - run: npm run build
 
       - name: Start backend
-        run: node dist/main &
+        run: node dist/main > /tmp/argus-smoke-unauth.log 2>&1 &
         env:
           PORT: '2901'
           NODE_ENV: test
@@ -100,6 +100,9 @@ jobs:
           LLM_API_BASE: http://localhost:11434/v1
           LLM_PROVIDER: local
           STORAGE_DRIVER: sqlite
+          STORAGE_DATA_FILE: /tmp/argus-smoke-unauth-chat.json
+          STORAGE_DB_FILE: /tmp/argus-smoke-unauth-chat.db
+          STORAGE_MEMORY_DB_FILE: /tmp/argus-smoke-unauth-memory.db
           RATE_LIMIT_ENABLED: 'false'
 
       - name: Wait for backend health
@@ -120,13 +123,10 @@ jobs:
           [ "$http_status" = "200" ] || { echo "FAIL: GET /api/health returned $http_status"; exit 1; }
           echo "PASS: GET /api/health -> 200"
 
-      - name: Smoke — stop unauthenticated backend
-        run: pkill -f 'node dist/main' || true
-
       - name: Start backend with auth on
-        run: node dist/main &
+        run: node dist/main > /tmp/argus-smoke-auth.log 2>&1 &
         env:
-          PORT: '2901'
+          PORT: '2902'
           NODE_ENV: test
           AUTH_ENABLED: 'true'
           AUTH_API_KEYS: smoke-test-key
@@ -134,12 +134,15 @@ jobs:
           LLM_API_BASE: http://localhost:11434/v1
           LLM_PROVIDER: local
           STORAGE_DRIVER: sqlite
+          STORAGE_DATA_FILE: /tmp/argus-smoke-auth-chat.json
+          STORAGE_DB_FILE: /tmp/argus-smoke-auth-chat.db
+          STORAGE_MEMORY_DB_FILE: /tmp/argus-smoke-auth-memory.db
           RATE_LIMIT_ENABLED: 'false'
 
       - name: Wait for auth backend health
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:2901/api/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:2902/api/health > /dev/null 2>&1; then
               echo "Backend is up after ${i}s"
               exit 0
             fi
@@ -150,25 +153,25 @@ jobs:
 
       - name: Smoke — unauthenticated chat rejected when auth on
         run: |
-          http_status=$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:2901/api/chat/conversations 2>/dev/null || true)
+          http_status=$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:2902/api/chat/conversations 2>/dev/null || true)
           [ "$http_status" = "401" ] || { echo "FAIL: expected 401, got $http_status"; exit 1; }
           echo "PASS: unauthenticated request -> 401"
 
       - name: Smoke — authenticated chat works with API key
         run: |
-          http_status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
+          http_status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2902/api/chat/conversations)
           [ "$http_status" = "200" ] || { echo "FAIL: expected 200, got $http_status"; exit 1; }
           echo "PASS: authenticated request -> 200"
 
       - name: Smoke — conversations list (auth on)
         run: |
-          http_status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2901/api/chat/conversations)
+          http_status=$(curl -sf -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-test-key' http://localhost:2902/api/chat/conversations)
           [ "$http_status" = "200" ] || { echo "FAIL: GET /api/chat/conversations returned $http_status"; exit 1; }
           echo "PASS: GET /api/chat/conversations -> 200"
 
       - name: Smoke — create conversation via message (auth on)
         run: |
-          response=$(curl -sS -X POST http://localhost:2901/api/chat/messages \
+          response=$(curl -sS -X POST http://localhost:2902/api/chat/messages \
             -H 'Content-Type: application/json' \
             -H 'X-API-Key: smoke-test-key' \
             -d '{"content":"show memory snapshot"}' \
@@ -177,13 +180,10 @@ jobs:
           [ "$http_status" = "200" ] || { echo "FAIL: POST /api/chat/messages returned $http_status"; echo "$response"; exit 1; }
           echo "PASS: POST /api/chat/messages -> 200"
 
-      - name: Smoke — stop API-key backend
-        run: pkill -f 'node dist/main' || true
-
       - name: Start backend with public sessions
-        run: node dist/main &
+        run: node dist/main > /tmp/argus-smoke-public-session.log 2>&1 &
         env:
-          PORT: '2901'
+          PORT: '2903'
           NODE_ENV: test
           AUTH_ENABLED: 'true'
           AUTH_API_KEYS: ''
@@ -193,12 +193,15 @@ jobs:
           LLM_API_BASE: http://localhost:11434/v1
           LLM_PROVIDER: local
           STORAGE_DRIVER: sqlite
+          STORAGE_DATA_FILE: /tmp/argus-smoke-public-chat.json
+          STORAGE_DB_FILE: /tmp/argus-smoke-public-chat.db
+          STORAGE_MEMORY_DB_FILE: /tmp/argus-smoke-public-memory.db
           RATE_LIMIT_ENABLED: 'false'
 
       - name: Wait for public-session backend health
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:2901/api/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:2903/api/health > /dev/null 2>&1; then
               echo "Backend is up after ${i}s"
               exit 0
             fi
@@ -211,7 +214,7 @@ jobs:
         run: |
           cookie_jar=$(mktemp)
           trap 'rm -f "$cookie_jar"' EXIT
-          http_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2901/api/chat/conversations)
+          http_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2903/api/chat/conversations)
           [ "$http_status" = "200" ] || { echo "FAIL: expected 200, got $http_status"; exit 1; }
           echo "PASS: public-session chat request -> 200"
 
@@ -219,8 +222,8 @@ jobs:
         run: |
           cookie_jar=$(mktemp)
           trap 'rm -f "$cookie_jar"' EXIT
-          bootstrap_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2901/api/chat/conversations)
+          bootstrap_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2903/api/chat/conversations)
           [ "$bootstrap_status" = "200" ] || { echo "FAIL: expected bootstrap 200, got $bootstrap_status"; exit 1; }
-          memory_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2901/api/memory/v2/stats)
+          memory_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2903/api/memory/v2/stats)
           [ "$memory_status" = "200" ] || { echo "FAIL: expected memory 200, got $memory_status"; exit 1; }
           echo "PASS: public-session memory request -> 200"
