@@ -150,10 +150,10 @@ describe('ConversationalMemoryCommandService', () => {
 
     const result = await service.handle('Forget my project');
 
-    expect(forgetUserFact).toHaveBeenCalledWith('project');
+    expect(forgetUserFact).toHaveBeenCalledWith('project', 'local:default');
     expect(result).toEqual({
       handled: true,
-      response: 'Okay — I forgot your stored project fact.',
+      response: 'I forgot your stored project fact (was "Argus").',
     });
   });
 
@@ -184,7 +184,7 @@ describe('ConversationalMemoryCommandService', () => {
     expect(result).toEqual({
       handled: true,
       response:
-        "I couldn't find a stored project fact matching StressAtlasLegacy to forget.\nManaged memory snapshot: userFacts=project=StressHeliosOnly. episodicMemories=none.",
+        'Я не нашёл сохранённый факт о проекте со значением StressAtlasLegacy, который можно забыть.\nСнэпшот управляемой памяти: userFacts=project=StressHeliosOnly. episodicMemories=none.',
     });
   });
 
@@ -209,7 +209,7 @@ describe('ConversationalMemoryCommandService', () => {
     expect(result).toEqual({
       handled: true,
       response:
-        "I couldn't find a stored project fact matching StressAtlasLegacy to forget.\nManaged memory snapshot: userFacts=project=StressHeliosOnly. episodicMemories=none.",
+        'Я не нашёл сохранённый факт о проекте со значением StressAtlasLegacy, который можно забыть.\nСнэпшот управляемой памяти: userFacts=project=StressHeliosOnly. episodicMemories=none.',
     });
   });
 
@@ -224,10 +224,10 @@ describe('ConversationalMemoryCommandService', () => {
 
     const result = await service.handle('Pin my current goal');
 
-    expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', true);
+    expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', true, 'local:default');
     expect(result).toEqual({
       handled: true,
-      response: 'Okay — I pinned the current goal memory: ship phase 8 controls.',
+      response: 'I pinned the current goal memory: ship phase 8 controls.',
     });
   });
 
@@ -276,12 +276,22 @@ describe('ConversationalMemoryCommandService', () => {
       conversation,
     );
 
-    expect(setEpisodicMemoryPinned).toHaveBeenNthCalledWith(1, '11111111-1111-4111-8111-111111111111', true);
-    expect(setEpisodicMemoryPinned).toHaveBeenNthCalledWith(2, '22222222-2222-4222-8222-222222222222', true);
+    expect(setEpisodicMemoryPinned).toHaveBeenNthCalledWith(
+      1,
+      '11111111-1111-4111-8111-111111111111',
+      true,
+      'local:default',
+    );
+    expect(setEpisodicMemoryPinned).toHaveBeenNthCalledWith(
+      2,
+      '22222222-2222-4222-8222-222222222222',
+      true,
+      'local:default',
+    );
     expect(result).toEqual({
       handled: true,
       response:
-        'Okay — I pinned the current goal memory: ship phase 8 controls.\nOkay — I pinned the current constraint memory: нельзя использовать vector database.',
+        'Я закрепил текущую запись об цели: ship phase 8 controls.\nЯ закрепил текущую запись об ограничении: нельзя использовать vector database.',
     });
   });
 
@@ -329,10 +339,10 @@ describe('ConversationalMemoryCommandService', () => {
 
     const result = await service.handle('Закрепи мою текущую цель.', conversation);
 
-    expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('44444444-4444-4444-8444-444444444444', true);
+    expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('44444444-4444-4444-8444-444444444444', true, 'local:default');
     expect(result).toEqual({
       handled: true,
-      response: 'Okay — I pinned the current goal memory: стабилизировать command parsing и stream-resilience.',
+      response: 'Я закрепил текущую запись об цели: стабилизировать command parsing и stream-resilience.',
     });
   });
 
@@ -370,7 +380,7 @@ describe('ConversationalMemoryCommandService', () => {
     expect(result).toEqual({
       handled: true,
       response:
-        'Okay — I pinned the current goal memory: внедрить universal response directives и compliance retry.\nManaged memory snapshot: userFacts=project=Argus. episodicMemories=goal=внедрить universal response directives и compliance retry [pinned].',
+        'Я закрепил текущую запись об цели: внедрить universal response directives и compliance retry.\nСнэпшот управляемой памяти: userFacts=project=Argus. episodicMemories=goal=внедрить universal response directives и compliance retry [pinned].',
     });
   });
 
@@ -413,10 +423,10 @@ describe('ConversationalMemoryCommandService', () => {
 
     const result = await service.handle('Закрепи ограничение про запрет vector database.', conversation);
 
-    expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('55555555-5555-4555-8555-555555555555', true);
+    expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('55555555-5555-4555-8555-555555555555', true, 'local:default');
     expect(result).toEqual({
       handled: true,
-      response: 'Okay — I pinned the current constraint memory: нельзя тащить vector database в обязательный контур.',
+      response: 'Я закрепил текущую запись об ограничении: нельзя тащить vector database в обязательный контур.',
     });
   });
 
@@ -445,7 +455,7 @@ describe('ConversationalMemoryCommandService', () => {
     expect(forgetUserFact).not.toHaveBeenCalled();
     expect(result).toEqual({
       handled: true,
-      response: "I couldn't find a stored project fact matching Atlas to forget.",
+      response: 'Я не нашёл сохранённый факт о проекте со значением Atlas, который можно забыть.',
     });
   });
-});
+ });
