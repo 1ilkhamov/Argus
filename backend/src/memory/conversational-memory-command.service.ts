@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 
 import { Conversation } from '../chat/entities/conversation.entity';
+import type { MemoryEntry } from './core/memory-entry.types';
+import { MemoryStoreService } from './core/memory-store.service';
 import {
   isMemoryInspectCommand,
   MEMORY_COMMAND_SPLIT,
@@ -9,9 +11,24 @@ import {
   startsWithMemoryPinVerb,
   startsWithMemoryUnpinVerb,
 } from './conversational-memory-command.matchers';
+import {
+  buildEpisodicNotFoundNote,
+  buildEpisodicPinnedNote,
+  buildEpisodicUnpinnedNote,
+  buildFactPinNotFoundNote,
+  buildFactPinnedNote,
+  buildFactUnpinnedNote,
+  buildForgetFactByValueDeletedNote,
+  buildForgetFactDeletedNote,
+  buildForgetFactNotFoundNote,
+  buildForgetFactValueNotFoundNote,
+  detectCommandResponseLanguage,
+  type CommandResponseLanguage,
+} from './commands/command.localizer';
 import type { EpisodicMemoryEntry, EpisodicMemoryKind } from './episodic-memory.types';
 import { MemoryManagementService, type ManagedMemorySnapshot } from './memory-management.service';
 import { MemoryStateVersionConflictError } from './memory-state-version-conflict.error';
+import { DEFAULT_LOCAL_MEMORY_SCOPE } from './memory.types';
 import type { UserProfileFactKey } from './user-profile-facts.types';
 
 export interface ConversationalMemoryCommandResult {
@@ -73,7 +90,10 @@ const STOP_WORDS = new Set([
 
 @Injectable()
 export class ConversationalMemoryCommandService {
-  constructor(private readonly memoryManagementService: MemoryManagementService) {}
+  constructor(
+    private readonly memoryManagementService: MemoryManagementService,
+    @Optional() private readonly memoryStoreService?: MemoryStoreService,
+  ) {}
 
   async handle(content: string, conversation?: Conversation): Promise<ConversationalMemoryCommandResult> {
     const commands = this.parseCommands(content);
@@ -81,17 +101,21 @@ export class ConversationalMemoryCommandService {
       return { handled: false };
     }
 
+    const language = detectCommandResponseLanguage(content);
+    const scopeKey = this.getScopeKey(conversation);
     const requiresSnapshotSync = commands.some((command) => command.action !== 'inspect');
-    const syncedSnapshot = requiresSnapshotSync ? await this.syncSnapshotBeforeMutation(conversation) : undefined;
+    const syncedSnapshot = requiresSnapshotSync ? await this.syncSnapshotBeforeMutation(conversation, scopeKey) : undefined;
     const responses: string[] = [];
     for (const command of commands) {
       if (command.action === 'inspect') {
-        responses.push(await this.buildSnapshotResponse());
+        responses.push(await this.buildSnapshotResponse(language, scopeKey));
         continue;
       }
 
       if (this.isFactCommand(command)) {
-        responses.push(await this.executeFactCommand(command.action, command.key, command.expectedValue, syncedSnapshot));
+        responses.push(
+          await this.executeFactCommand(command.action, command.key, command.expectedValue, syncedSnapshot, language, scopeKey),
+        );
         continue;
       }
 
@@ -102,6 +126,8 @@ export class ConversationalMemoryCommandService {
           conversation,
           command.selectorText,
           syncedSnapshot,
+          language,
+          scopeKey,
         ),
       );
     }
@@ -112,12 +138,13 @@ export class ConversationalMemoryCommandService {
     };
   }
 
-  private async syncSnapshotBeforeMutation(conversation?: Conversation): Promise<ManagedMemorySnapshot> {
+  private async syncSnapshotBeforeMutation(conversation: Conversation | undefined, scopeKey: string): Promise<ManagedMemorySnapshot> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         return await this.memoryManagementService.saveSnapshot(
           await this.memoryManagementService.getEffectiveSnapshot(conversation, {
             excludeLatestUserMessage: Boolean(conversation),
+            scopeKey,
           }),
         );
       } catch (error) {
@@ -211,6 +238,14 @@ export class ConversationalMemoryCommandService {
       return undefined;
     }
 
+    if (factKey === 'goal' && action !== 'forget_fact') {
+      return {
+        action: action === 'pin' ? 'pin_episodic' : 'unpin_episodic',
+        kind: 'goal',
+        selectorText: clause,
+      };
+    }
+
     return {
       action: action === 'pin' ? 'pin_fact' : action === 'unpin' ? 'unpin_fact' : 'forget_fact',
       key: factKey,
@@ -295,22 +330,24 @@ export class ConversationalMemoryCommandService {
     return 'key' in command;
   }
 
-  private async buildSnapshotResponse(): Promise<string> {
-    const snapshot = await this.memoryManagementService.getSnapshot();
+  private async buildSnapshotResponse(language: CommandResponseLanguage, scopeKey: string): Promise<string> {
+    const snapshot = await this.memoryManagementService.getSnapshot(scopeKey);
+    const storeEntries = this.isSnapshotEmpty(snapshot) ? await this.loadStoreEntries(scopeKey) : [];
     const facts =
       snapshot.userFacts.length > 0
         ? snapshot.userFacts
             .map((fact) => `${fact.key}=${fact.value}${fact.pinned ? ' [pinned]' : ''}`)
             .join('; ')
-        : 'none';
+        : this.formatStoreFacts(storeEntries);
     const episodicMemories =
       snapshot.episodicMemories.length > 0
         ? snapshot.episodicMemories
             .map((entry) => `${entry.kind}=${entry.summary}${entry.pinned ? ' [pinned]' : ''}`)
             .join('; ')
-        : 'none';
+        : this.formatStoreEpisodicMemories(storeEntries);
 
-    return `Managed memory snapshot: userFacts=${facts}. episodicMemories=${episodicMemories}.`;
+    const prefix = language === 'ru' ? 'Снэпшот управляемой памяти' : 'Managed memory snapshot';
+    return `${prefix}: userFacts=${facts}. episodicMemories=${episodicMemories}.`;
   }
 
   private async executeFactCommand(
@@ -318,33 +355,84 @@ export class ConversationalMemoryCommandService {
     key: UserProfileFactKey,
     expectedValue?: string,
     snapshot?: ManagedMemorySnapshot,
+    language: CommandResponseLanguage = 'en',
+    scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
   ): Promise<string> {
     const targetFact = snapshot?.userFacts.find((fact) => fact.key === key);
+    const fallbackFact = !targetFact ? await this.findStoreFactEntry(scopeKey, key, expectedValue) : undefined;
 
     if (action === 'forget_fact') {
-      if (!targetFact) {
-        return `I couldn't find a stored ${key} fact to forget.`;
+      if (!targetFact && !fallbackFact) {
+        return expectedValue
+          ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
+          : buildForgetFactNotFoundNote(language, key);
       }
 
-      if (expectedValue && this.normalizeForComparison(targetFact.value) !== this.normalizeForComparison(expectedValue)) {
-        return `I couldn't find a stored ${key} fact matching ${expectedValue} to forget.`;
+      if (
+        targetFact &&
+        expectedValue &&
+        this.normalizeForComparison(targetFact.value) !== this.normalizeForComparison(expectedValue)
+      ) {
+        return buildForgetFactValueNotFoundNote(language, key, expectedValue);
       }
 
-      const deleted = await this.memoryManagementService.forgetUserFact(key);
-      return deleted
-        ? `Okay — I forgot your stored ${key} fact.`
-        : `I couldn't find a stored ${key} fact to forget.`;
+      if (targetFact) {
+        const deleted = await this.memoryManagementService.forgetUserFact(key, scopeKey);
+        await this.deleteStoreFact(scopeKey, key, expectedValue ?? targetFact.value);
+        if (!deleted) {
+          return expectedValue
+            ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
+            : buildForgetFactNotFoundNote(language, key);
+        }
+
+        return expectedValue
+          ? buildForgetFactByValueDeletedNote(language, key, expectedValue)
+          : buildForgetFactDeletedNote(language, key, targetFact.value);
+      }
+
+      if (!fallbackFact || !this.memoryStoreService) {
+        return expectedValue
+          ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
+          : buildForgetFactNotFoundNote(language, key);
+      }
+
+      const deleted = await this.memoryStoreService.delete(fallbackFact.id);
+      if (!deleted) {
+        return expectedValue
+          ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
+          : buildForgetFactNotFoundNote(language, key);
+      }
+
+      return expectedValue
+        ? buildForgetFactByValueDeletedNote(language, key, expectedValue)
+        : buildForgetFactDeletedNote(language, key, fallbackFact.content);
     }
 
     const pinned = action === 'pin_fact';
-    const fact = await this.memoryManagementService.setUserFactPinned(key, pinned);
-    if (!fact) {
-      return `I couldn't find a stored ${key} fact to ${pinned ? 'pin' : 'unpin'}.`;
+    if (targetFact) {
+      const fact = await this.memoryManagementService.setUserFactPinned(key, pinned, scopeKey);
+      await this.setStoreFactPinned(scopeKey, key, targetFact.value, pinned);
+      if (!fact) {
+        return buildFactPinNotFoundNote(language, key, pinned);
+      }
+
+      return pinned
+        ? buildFactPinnedNote(language, key, fact.value)
+        : buildFactUnpinnedNote(language, key, fact.value);
+    }
+
+    if (!fallbackFact || !this.memoryStoreService) {
+      return buildFactPinNotFoundNote(language, key, pinned);
+    }
+
+    const updated = await this.memoryStoreService.update(fallbackFact.id, { pinned });
+    if (!updated) {
+      return buildFactPinNotFoundNote(language, key, pinned);
     }
 
     return pinned
-      ? `Okay — I pinned your stored ${key} fact: ${fact.value}.`
-      : `Okay — I unpinned your stored ${key} fact: ${fact.value}.`;
+      ? buildFactPinnedNote(language, key, updated.content)
+      : buildFactUnpinnedNote(language, key, updated.content);
   }
 
   private async executeEpisodicCommand(
@@ -353,21 +441,243 @@ export class ConversationalMemoryCommandService {
     conversation?: Conversation,
     selectorText = '',
     snapshot?: ManagedMemorySnapshot,
+    language: CommandResponseLanguage = 'en',
+    scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
   ): Promise<string> {
     const target = this.pickRelevantEntryByKind(snapshot?.episodicMemories ?? [], kind, conversation, selectorText);
-    if (!target) {
-      return `I couldn't find a stored ${kind} memory to ${action === 'pin_episodic' ? 'pin' : 'unpin'}.`;
-    }
-
     const pinned = action === 'pin_episodic';
-    const updated = await this.memoryManagementService.setEpisodicMemoryPinned(target.id, pinned);
-    if (!updated) {
-      return `I couldn't find a stored ${kind} memory to ${pinned ? 'pin' : 'unpin'}.`;
+    if (target) {
+      const updated = await this.memoryManagementService.setEpisodicMemoryPinned(target.id, pinned, scopeKey);
+      await this.setStoreEpisodicPinned(scopeKey, kind, conversation, selectorText, pinned, target.summary);
+      if (updated) {
+        return pinned
+          ? buildEpisodicPinnedNote(language, kind, updated.summary)
+          : buildEpisodicUnpinnedNote(language, kind, updated.summary);
+      }
     }
 
+    const fallbackEntry = await this.findStoreEpisodicEntry(scopeKey, kind, conversation, selectorText);
+    if (!fallbackEntry || !this.memoryStoreService) {
+      return buildEpisodicNotFoundNote(language, kind, pinned ? 'pin' : 'unpin');
+    }
+
+    const updated = await this.memoryStoreService.update(fallbackEntry.id, { pinned });
+    if (!updated) {
+      return buildEpisodicNotFoundNote(language, kind, pinned ? 'pin' : 'unpin');
+    }
+
+    const summary = updated.summary ?? updated.content;
     return pinned
-      ? `Okay — I pinned the current ${kind} memory: ${updated.summary}.`
-      : `Okay — I unpinned the current ${kind} memory: ${updated.summary}.`;
+      ? buildEpisodicPinnedNote(language, kind, summary)
+      : buildEpisodicUnpinnedNote(language, kind, summary);
+  }
+
+  private getScopeKey(conversation?: Conversation): string {
+    return conversation?.scopeKey || DEFAULT_LOCAL_MEMORY_SCOPE;
+  }
+
+  private isSnapshotEmpty(snapshot: ManagedMemorySnapshot): boolean {
+    return snapshot.userFacts.length === 0 && snapshot.episodicMemories.length === 0;
+  }
+
+  private async loadStoreEntries(scopeKey: string): Promise<MemoryEntry[]> {
+    if (!this.memoryStoreService) {
+      return [];
+    }
+
+    return this.memoryStoreService.query({
+      scopeKey,
+      excludeSuperseded: true,
+      limit: 100,
+    });
+  }
+
+  private formatStoreFacts(entries: MemoryEntry[]): string {
+    const facts = entries
+      .filter((entry) => entry.kind === 'fact')
+      .map((entry) => {
+        const key = entry.category ?? this.inferFactKeyFromStoreEntry(entry) ?? 'general';
+        return `${key}=${entry.content}${entry.pinned ? ' [pinned]' : ''}`;
+      });
+
+    return facts.length > 0 ? facts.join('; ') : 'none';
+  }
+
+  private formatStoreEpisodicMemories(entries: MemoryEntry[]): string {
+    const episodic = entries
+      .map((entry) => {
+        const kind = this.inferStoreEpisodicKind(entry);
+        if (!kind) {
+          return undefined;
+        }
+
+        const summary = entry.summary ?? entry.content;
+        const pinnedSuffix = entry.pinned ? ' [pinned]' : '';
+        return `${kind}=${summary}${pinnedSuffix} ([${entry.kind}] ${summary}${pinnedSuffix})`;
+      })
+      .filter((entry): entry is string => Boolean(entry));
+
+    return episodic.length > 0 ? episodic.join('; ') : 'none';
+  }
+
+  private async findStoreFactEntry(
+    scopeKey: string,
+    key: UserProfileFactKey,
+    expectedValue?: string,
+  ): Promise<MemoryEntry | undefined> {
+    const entries = await this.loadStoreEntries(scopeKey);
+    return entries.find((entry) => {
+      if (entry.kind !== 'fact' || !this.matchesStoreFactKey(entry, key)) {
+        return false;
+      }
+
+      if (!expectedValue) {
+        return true;
+      }
+
+      return this.normalizeForComparison(entry.content) === this.normalizeForComparison(expectedValue);
+    });
+  }
+
+  private async deleteStoreFact(scopeKey: string, key: UserProfileFactKey, expectedValue?: string): Promise<void> {
+    if (!this.memoryStoreService) {
+      return;
+    }
+
+    const target = await this.findStoreFactEntry(scopeKey, key, expectedValue);
+    if (target) {
+      await this.memoryStoreService.delete(target.id);
+    }
+  }
+
+  private async setStoreFactPinned(
+    scopeKey: string,
+    key: UserProfileFactKey,
+    expectedValue: string,
+    pinned: boolean,
+  ): Promise<void> {
+    if (!this.memoryStoreService) {
+      return;
+    }
+
+    const target = await this.findStoreFactEntry(scopeKey, key, expectedValue);
+    if (target) {
+      await this.memoryStoreService.update(target.id, { pinned });
+    }
+  }
+
+  private async findStoreEpisodicEntry(
+    scopeKey: string,
+    kind: EpisodicMemoryKind,
+    conversation?: Conversation,
+    selectorText = '',
+  ): Promise<MemoryEntry | undefined> {
+    const entries = (await this.loadStoreEntries(scopeKey)).filter((entry) => this.inferStoreEpisodicKind(entry) === kind);
+    return this.pickRelevantStoreEntry(entries, conversation, selectorText);
+  }
+
+  private async setStoreEpisodicPinned(
+    scopeKey: string,
+    kind: EpisodicMemoryKind,
+    conversation: Conversation | undefined,
+    selectorText: string,
+    pinned: boolean,
+    expectedSummary: string,
+  ): Promise<void> {
+    if (!this.memoryStoreService) {
+      return;
+    }
+
+    const target =
+      (await this.findStoreEpisodicEntry(scopeKey, kind, conversation, selectorText)) ??
+      (await this.findStoreEpisodicEntry(scopeKey, kind, conversation, expectedSummary));
+    if (target) {
+      await this.memoryStoreService.update(target.id, { pinned });
+    }
+  }
+
+  private inferFactKeyFromStoreEntry(entry: MemoryEntry): UserProfileFactKey | undefined {
+    if (entry.category === 'name') {
+      return 'name';
+    }
+    if (entry.category === 'role') {
+      return 'role';
+    }
+    if (entry.category === 'project') {
+      return 'project';
+    }
+    if (entry.category === 'goal') {
+      return 'goal';
+    }
+
+    if (entry.tags.includes('name')) {
+      return 'name';
+    }
+    if (entry.tags.includes('role')) {
+      return 'role';
+    }
+    if (entry.tags.includes('project')) {
+      return 'project';
+    }
+    if (entry.tags.includes('goal')) {
+      return 'goal';
+    }
+
+    return undefined;
+  }
+
+  private matchesStoreFactKey(entry: MemoryEntry, key: UserProfileFactKey): boolean {
+    return this.inferFactKeyFromStoreEntry(entry) === key;
+  }
+
+  private inferStoreEpisodicKind(entry: MemoryEntry): EpisodicMemoryKind | undefined {
+    if (entry.category === 'goal' || entry.tags.includes('goal')) {
+      return 'goal';
+    }
+    if (entry.category === 'constraint' || entry.tags.includes('constraint')) {
+      return 'constraint';
+    }
+    if (entry.category === 'decision' || entry.tags.includes('decision')) {
+      return 'decision';
+    }
+    if (entry.category === 'task' || entry.tags.includes('task')) {
+      return 'task';
+    }
+
+    if (entry.kind === 'preference') {
+      return 'constraint';
+    }
+    if (entry.kind === 'action') {
+      return 'task';
+    }
+
+    return undefined;
+  }
+
+  private pickRelevantStoreEntry(
+    entries: MemoryEntry[],
+    conversation?: Conversation,
+    selectorText = '',
+  ): MemoryEntry | undefined {
+    const queryContext = `${this.buildRecentConversationContext(conversation)} ${selectorText}`;
+    const queryTokens = this.tokenize(queryContext);
+
+    return entries
+      .sort((left, right) => {
+        const rightText = right.summary ?? right.content;
+        const leftText = left.summary ?? left.content;
+        const overlapDelta = this.calculateOverlap(rightText, queryTokens) - this.calculateOverlap(leftText, queryTokens);
+        if (overlapDelta !== 0) {
+          return overlapDelta;
+        }
+
+        const recencyDelta = right.updatedAt.localeCompare(left.updatedAt);
+        if (recencyDelta !== 0) {
+          return recencyDelta;
+        }
+
+        return Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+      })[0];
   }
 
   private pickRelevantEntryByKind(

@@ -49,8 +49,9 @@ export class MemoryResolverService {
   async resolveInteractionPreferences(
     conversation: Conversation,
     sourceConversation: Conversation = conversation,
+    scopeKey = conversation.scopeKey || DEFAULT_LOCAL_MEMORY_SCOPE,
   ): Promise<ResolvedInteractionPreferencesContext> {
-    const persistedProfile = await this.memoryService.getInteractionPreferences(DEFAULT_LOCAL_MEMORY_SCOPE);
+    const persistedProfile = await this.memoryService.getInteractionPreferences(scopeKey);
     const userProfile = this.userProfileService.resolveProfile(
       sourceConversation,
       persistedProfile ?? DEFAULT_AGENT_USER_PROFILE,
@@ -59,7 +60,7 @@ export class MemoryResolverService {
     const source = persistedProfile ? 'persisted_profile_and_recent_context' : 'recent_context';
     this.logger.debug(
       `Interaction preferences pipeline ${JSON.stringify({
-        scopeKey: DEFAULT_LOCAL_MEMORY_SCOPE,
+        scopeKey,
         source,
         sourceUserMessages: sourceConversation.messages.filter((message) => message.role === 'user').length,
         persistedProfile: this.describeUserProfile(persistedProfile),
@@ -77,8 +78,9 @@ export class MemoryResolverService {
   async resolveUserFacts(
     conversation: Conversation,
     sourceConversation: Conversation = conversation,
+    scopeKey = conversation.scopeKey || DEFAULT_LOCAL_MEMORY_SCOPE,
   ): Promise<ResolvedUserFactsContext> {
-    const persistedFacts = await this.memoryService.getUserProfileFacts(DEFAULT_LOCAL_MEMORY_SCOPE);
+    const persistedFacts = await this.memoryService.getUserProfileFacts(scopeKey);
     const shouldExtractFromConversation = sourceConversation === conversation || this.hasUserMessages(sourceConversation);
     const resolvedFacts = shouldExtractFromConversation
       ? this.userFactsExtractorService.resolveFacts(sourceConversation, persistedFacts)
@@ -94,7 +96,7 @@ export class MemoryResolverService {
 
     this.logger.debug(
       `User facts pipeline ${JSON.stringify({
-        scopeKey: DEFAULT_LOCAL_MEMORY_SCOPE,
+        scopeKey,
         source,
         persisted: this.summarizeFacts(persistedFacts),
         resolved: this.summarizeFacts(resolvedFacts),
@@ -108,7 +110,7 @@ export class MemoryResolverService {
     );
 
     return {
-      scopeKey: DEFAULT_LOCAL_MEMORY_SCOPE,
+      scopeKey,
       source,
       facts: promptFacts,
       storedFacts: factsForStorage,
@@ -118,8 +120,9 @@ export class MemoryResolverService {
   async resolveEpisodicMemory(
     conversation: Conversation,
     sourceConversation: Conversation = conversation,
+    scopeKey = conversation.scopeKey || DEFAULT_LOCAL_MEMORY_SCOPE,
   ): Promise<ResolvedEpisodicMemoryContext> {
-    const persistedEntries = await this.memoryService.getEpisodicMemoryEntries(DEFAULT_LOCAL_MEMORY_SCOPE);
+    const persistedEntries = await this.memoryService.getEpisodicMemoryEntries(scopeKey);
     const shouldExtractFromConversation = sourceConversation === conversation || this.hasUserMessages(sourceConversation);
     const resolvedEntries = shouldExtractFromConversation
       ? this.episodicMemoryExtractorService.resolveMemories(sourceConversation, persistedEntries)
@@ -136,7 +139,7 @@ export class MemoryResolverService {
 
     this.logger.debug(
       `Episodic memory pipeline ${JSON.stringify({
-        scopeKey: DEFAULT_LOCAL_MEMORY_SCOPE,
+        scopeKey,
         source,
         persisted: this.summarizeEntries(persistedEntries),
         resolved: this.summarizeEntries(resolvedEntries),
@@ -152,7 +155,7 @@ export class MemoryResolverService {
     );
 
     return {
-      scopeKey: DEFAULT_LOCAL_MEMORY_SCOPE,
+      scopeKey,
       source,
       entries,
       relevantEntries,
@@ -179,13 +182,13 @@ export class MemoryResolverService {
   private async resolveUserMemoryInternal(
     conversation: Conversation,
   ): Promise<{ resolvedUserMemory: ResolvedUserMemoryContext; commitContext: ManagedUserMemoryCommitContext }> {
-    const scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE;
+    const scopeKey = conversation.scopeKey || DEFAULT_LOCAL_MEMORY_SCOPE;
     const metadata = await this.memoryService.getManagedMemoryStateMetadata(scopeKey);
     const pendingConversation = buildPendingManagedMemoryConversation(conversation, metadata.lastProcessedUserMessage);
     const [interactionPreferences, userFacts, episodicMemory] = await Promise.all([
-      this.resolveInteractionPreferences(conversation, pendingConversation.conversation),
-      this.resolveUserFacts(conversation, pendingConversation.conversation),
-      this.resolveEpisodicMemory(conversation, pendingConversation.conversation),
+      this.resolveInteractionPreferences(conversation, pendingConversation.conversation, scopeKey),
+      this.resolveUserFacts(conversation, pendingConversation.conversation, scopeKey),
+      this.resolveEpisodicMemory(conversation, pendingConversation.conversation, scopeKey),
     ]);
 
     return {
@@ -235,9 +238,14 @@ export class MemoryResolverService {
     resolvedUserMemory: ResolvedUserMemoryContext,
     commitContext?: ManagedUserMemoryCommitContext,
   ): Promise<void> {
+    const scopeKey =
+      commitContext?.scopeKey ||
+      resolvedUserMemory.userFacts.scopeKey ||
+      resolvedUserMemory.episodicMemory.scopeKey ||
+      DEFAULT_LOCAL_MEMORY_SCOPE;
     const [persistedFacts, persistedEntries] = await Promise.all([
-      this.memoryService.getUserProfileFacts(DEFAULT_LOCAL_MEMORY_SCOPE),
-      this.memoryService.getEpisodicMemoryEntries(DEFAULT_LOCAL_MEMORY_SCOPE),
+      this.memoryService.getUserProfileFacts(scopeKey),
+      this.memoryService.getEpisodicMemoryEntries(scopeKey),
     ]);
     const { facts: storedFacts } = sanitizeFactsForCommit(
       resolvedUserMemory.userFacts.storedFacts,
@@ -251,7 +259,7 @@ export class MemoryResolverService {
     );
 
     await this.memoryService.saveManagedMemoryState({
-      scopeKey: DEFAULT_LOCAL_MEMORY_SCOPE,
+      scopeKey,
       interactionPreferences: resolvedUserMemory.interactionPreferences.userProfile,
       userFacts: storedFacts,
       episodicMemories: storedEntries,
@@ -261,7 +269,7 @@ export class MemoryResolverService {
 
     this.logger.debug(
       `Resolved user memory commit ${JSON.stringify({
-        scopeKey: DEFAULT_LOCAL_MEMORY_SCOPE,
+        scopeKey,
         expectedVersion: commitContext?.expectedVersion,
         lastProcessedUserMessageId: commitContext?.lastProcessedUserMessage?.messageId,
         interactionPreferences: this.describeUserProfile(resolvedUserMemory.interactionPreferences.userProfile),
