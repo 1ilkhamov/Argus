@@ -15,6 +15,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config > /dev/null
+
   cli:
     runs-on: ubuntu-latest
     steps:
@@ -170,3 +176,51 @@ jobs:
           http_status=$(echo "$response" | tail -1)
           [ "$http_status" = "200" ] || { echo "FAIL: POST /api/chat/messages returned $http_status"; echo "$response"; exit 1; }
           echo "PASS: POST /api/chat/messages -> 200"
+
+      - name: Smoke — stop API-key backend
+        run: pkill -f 'node dist/main' || true
+
+      - name: Start backend with public sessions
+        run: node dist/main &
+        env:
+          PORT: '2901'
+          NODE_ENV: test
+          AUTH_ENABLED: 'true'
+          AUTH_API_KEYS: ''
+          AUTH_PUBLIC_SESSIONS_ENABLED: 'true'
+          AUTH_PUBLIC_SESSION_SECRET: smoke-session-secret
+          LLM_API_KEY: test-key
+          LLM_API_BASE: http://localhost:11434/v1
+          LLM_PROVIDER: local
+          STORAGE_DRIVER: sqlite
+          RATE_LIMIT_ENABLED: 'false'
+
+      - name: Wait for public-session backend health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:2901/api/health > /dev/null 2>&1; then
+              echo "Backend is up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend failed to start within 30s"
+          exit 1
+
+      - name: Smoke — public session chat works without API key
+        run: |
+          cookie_jar=$(mktemp)
+          trap 'rm -f "$cookie_jar"' EXIT
+          http_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2901/api/chat/conversations)
+          [ "$http_status" = "200" ] || { echo "FAIL: expected 200, got $http_status"; exit 1; }
+          echo "PASS: public-session chat request -> 200"
+
+      - name: Smoke — public session memory works with same cookie
+        run: |
+          cookie_jar=$(mktemp)
+          trap 'rm -f "$cookie_jar"' EXIT
+          bootstrap_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2901/api/chat/conversations)
+          [ "$bootstrap_status" = "200" ] || { echo "FAIL: expected bootstrap 200, got $bootstrap_status"; exit 1; }
+          memory_status=$(curl -sS -o /dev/null -w '%{http_code}' -c "$cookie_jar" -b "$cookie_jar" http://localhost:2901/api/memory/v2/stats)
+          [ "$memory_status" = "200" ] || { echo "FAIL: expected memory 200, got $memory_status"; exit 1; }
+          echo "PASS: public-session memory request -> 200"

@@ -1,5 +1,5 @@
-export type MemoryKind = 'fact' | 'episode' | 'action' | 'learning' | 'skill' | 'preference';
-export type MemoryHorizon = 'working' | 'short_term' | 'long_term' | 'archive';
+export type MemoryKind = 'fact' | 'episode' | 'action' | 'learning' | 'skill' | 'preference' | 'identity';
+export type MemoryHorizon = 'working' | 'short_term' | 'long_term';
 
 export interface MemoryEntryDto {
   id: string;
@@ -31,6 +31,7 @@ export interface MemoryStatsResponse {
   learnings: number;
   skills: number;
   preferences: number;
+  identities: number;
   pinned: number;
   longTerm: number;
   shortTerm: number;

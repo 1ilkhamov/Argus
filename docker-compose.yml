@@ -1,29 +1,58 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: argus
       POSTGRES_USER: argus
       POSTGRES_PASSWORD: argus
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.5
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - '6333:6333'
 
   backend:
     build:
       context: ./backend
+    restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     environment:
       PORT: 3000
       NODE_ENV: production
       CORS_ORIGIN: http://localhost:8080
+      TRUST_PROXY_HOPS: 1
       AUTH_ENABLED: 'true'
-      AUTH_API_KEYS: ${AUTH_API_KEYS}
-      AUTH_ADMIN_API_KEY: ${AUTH_ADMIN_API_KEY}
+      AUTH_API_KEYS: ${AUTH_API_KEYS:-}
+      AUTH_ADMIN_API_KEY: ${AUTH_ADMIN_API_KEY:-}
+      AUTH_PUBLIC_SESSIONS_ENABLED: ${AUTH_PUBLIC_SESSIONS_ENABLED:-true}
+      AUTH_PUBLIC_SESSION_SECRET: ${AUTH_PUBLIC_SESSION_SECRET:-change-me-in-production}
+      AUTH_PUBLIC_SESSION_TTL_DAYS: ${AUTH_PUBLIC_SESSION_TTL_DAYS:-30}
       SETTINGS_ENCRYPTION_SECRET: ${SETTINGS_ENCRYPTION_SECRET:-}
       RATE_LIMIT_ENABLED: 'true'
       RATE_LIMIT_WINDOW_MS: 60000
@@ -36,13 +65,29 @@ services:
       STORAGE_DB_FILE: /app/data/chat-store.db
       STORAGE_MEMORY_DB_FILE: /app/data/memory-store.db
       STORAGE_POSTGRES_URL: postgres://argus:argus@postgres:5432/argus
+      LLM_PROVIDER: ${LLM_PROVIDER:-local}
       LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:8317/v1}
-      LLM_API_KEY: ${LLM_API_KEY}
-      LLM_MODEL: local-model
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-local-model}
       LLM_MAX_TOKENS: 4096
       LLM_TEMPERATURE: 0.7
+      EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-true}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-local-embedding}
+      EMBEDDING_LOCAL_MODEL: ${EMBEDDING_LOCAL_MODEL:-Xenova/multilingual-e5-small}
+      MEMORY_QDRANT_URL: ${MEMORY_QDRANT_URL:-http://qdrant:6333}
+      MEMORY_QDRANT_API_KEY: ${MEMORY_QDRANT_API_KEY:-}
+      MEMORY_QDRANT_COLLECTION: ${MEMORY_QDRANT_COLLECTION:-argus_memory}
+      MEMORY_QDRANT_VECTOR_SIZE: ${MEMORY_QDRANT_VECTOR_SIZE:-384}
     extra_hosts:
       - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test:
+        ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/api/health').then((response) => { process.exit(response.ok ? 0 : 1); }).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     volumes:
       - backend_data:/app/data
     ports:
@@ -51,14 +96,23 @@ services:
   frontend:
     build:
       context: ./frontend
+    restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     environment:
-      API_KEY: ${AUTH_API_KEYS}
-      ADMIN_API_KEY: ${AUTH_ADMIN_API_KEY}
+      API_KEY: ${AUTH_API_KEYS:-}
+      ADMIN_API_KEY: ${AUTH_ADMIN_API_KEY:-}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O - http://127.0.0.1/ >/dev/null 2>&1 || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     ports:
       - '8080:80'
 
 volumes:
   backend_data:
   postgres_data:
+  qdrant_data:

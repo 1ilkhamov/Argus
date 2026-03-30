@@ -99,8 +99,12 @@ export class HealthService {
       this.llmService.checkHealth(),
     ]);
 
-    const embeddingStatus: 'up' | 'down' | 'disabled' = this.embeddingService.isAvailable() ? 'up' : 'disabled';
-    const qdrantStatus: 'up' | 'down' | 'disabled' = this.qdrantService.isReady() ? 'up' : 'disabled';
+    const embeddingStatus: 'up' | 'down' | 'disabled' = this.embeddingService.isEnabled()
+      ? (this.embeddingService.isAvailable() ? 'up' : 'down')
+      : 'disabled';
+    const qdrantStatus: 'up' | 'down' | 'disabled' = this.qdrantService.isConfigured()
+      ? (this.qdrantService.isReady() ? 'up' : 'down')
+      : 'disabled';
 
     const coreUp = storage.status === 'up' && llm.status === 'up';
 

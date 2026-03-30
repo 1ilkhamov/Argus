@@ -1,6 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { EmbeddingService } from '../../embedding/embedding.service';
+
 import type {
   QdrantConfig,
   QdrantFilter,
@@ -31,7 +33,10 @@ export class QdrantVectorService implements OnModuleInit {
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly embeddingService: EmbeddingService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     const url = this.configService.get<string>('memory.qdrant.url', '');
@@ -40,11 +45,21 @@ export class QdrantVectorService implements OnModuleInit {
       return;
     }
 
+    const configuredVectorSize = this.configService.get<number>('memory.qdrant.vectorSize', 768);
+    const detectedVectorSize = this.embeddingService.getActualDimensions();
+    const resolvedVectorSize = detectedVectorSize ?? configuredVectorSize;
+
+    if (detectedVectorSize && detectedVectorSize !== configuredVectorSize) {
+      this.logger.log(
+        `Qdrant vector size resolved from embedding provider: ${detectedVectorSize} (configured=${configuredVectorSize})`,
+      );
+    }
+
     this.config = {
       url: url.replace(/\/+$/, ''),
       apiKey: this.configService.get<string>('memory.qdrant.apiKey', ''),
       collectionName: this.configService.get<string>('memory.qdrant.collectionName', 'argus_memory'),
-      vectorSize: this.configService.get<number>('memory.qdrant.vectorSize', 768),
+      vectorSize: resolvedVectorSize,
     };
 
     await this.ensureCollection();
@@ -54,10 +69,15 @@ export class QdrantVectorService implements OnModuleInit {
     return this.ready && !this.isCircuitOpen();
   }
 
+  isConfigured(): boolean {
+    return Boolean(this.config);
+  }
+
   // ─── Write ──────────────────────────────────────────────────────────────
 
   async upsertPoints(points: QdrantPoint[]): Promise<void> {
     if (!this.config || points.length === 0) return;
+    if (!(await this.ensureReady())) return;
 
     await this.request('PUT', `/collections/${this.config.collectionName}/points`, {
       points: points.map((p) => ({
@@ -70,6 +90,7 @@ export class QdrantVectorService implements OnModuleInit {
 
   async deletePoints(ids: string[]): Promise<void> {
     if (!this.config || ids.length === 0) return;
+    if (!(await this.ensureReady())) return;
 
     await this.request('POST', `/collections/${this.config.collectionName}/points/delete`, {
       points: ids,
@@ -85,6 +106,7 @@ export class QdrantVectorService implements OnModuleInit {
     scoreThreshold?: number,
   ): Promise<QdrantSearchResult[]> {
     if (!this.config) return [];
+    if (!(await this.ensureReady())) return [];
 
     const body: Record<string, unknown> = {
       vector,
@@ -112,6 +134,15 @@ export class QdrantVectorService implements OnModuleInit {
   }
 
   // ─── Collection management ──────────────────────────────────────────────
+
+  private async ensureReady(): Promise<boolean> {
+    if (!this.config) return false;
+    if (this.ready && !this.isCircuitOpen()) return true;
+    if (this.isCircuitOpen()) return false;
+
+    await this.ensureCollection();
+    return this.ready;
+  }
 
   private async ensureCollection(): Promise<void> {
     if (!this.config) return;

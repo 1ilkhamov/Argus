@@ -117,7 +117,7 @@ export class AuthService {
     response.cookie(cookieName, token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: this.configService.get<string>('nodeEnv', 'development') === 'production',
+      secure: this.shouldUseSecureCookies(request),
       path: '/api',
       maxAge: ttlDays * 24 * 60 * 60 * 1000,
     });
@@ -125,9 +125,27 @@ export class AuthService {
     return { sessionId, expiresAt };
   }
 
+  private shouldUseSecureCookies(request: Request): boolean {
+    if (request.secure) {
+      return true;
+    }
+
+    const forwardedProto = request.header('x-forwarded-proto');
+    if (!forwardedProto) {
+      return false;
+    }
+
+    return forwardedProto
+      .split(',')
+      .some((value) => value.trim().toLowerCase() === 'https');
+  }
+
   private isPublicSessionEligiblePath(request: Request): boolean {
     const path = request.path || request.url || '';
-    return path.startsWith('/api/chat') || path.startsWith('/chat');
+    return path.startsWith('/api/chat')
+      || path.startsWith('/chat')
+      || path.startsWith('/api/memory/v2')
+      || path.startsWith('/memory/v2');
   }
 
   private extractCookie(request: Request, cookieName: string): string | undefined {

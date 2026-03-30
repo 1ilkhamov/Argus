@@ -121,6 +121,21 @@ describe('AuthService', () => {
       expect(response.cookie).toHaveBeenCalledTimes(1);
     });
 
+    it('issues a public-session cookie for memory paths without an API key', () => {
+      const response = createResponse();
+      const identity = service.resolveIdentity(createRequest({}, '/api/memory/v2/entries'), response);
+
+      expect(identity.authenticated).toBe(true);
+      expect(identity.role).toBe('user');
+      expect(identity.authType).toBe('public_session');
+      expect(response.cookie).toHaveBeenCalledTimes(1);
+      expect((response.cookie as jest.Mock).mock.calls[0]?.[2]).toMatchObject({
+        path: '/api',
+        sameSite: 'lax',
+        secure: false,
+      });
+    });
+
     it('reuses a valid public-session cookie without issuing a new one', () => {
       const response = createResponse();
       service.resolveIdentity(createRequest(), response);
@@ -144,6 +159,16 @@ describe('AuthService', () => {
       expect(identity.authenticated).toBe(false);
       expect(identity.role).toBe('anonymous');
       expect(response.cookie).not.toHaveBeenCalled();
+    });
+
+    it('marks public-session cookies as secure when the request is forwarded over https', () => {
+      const response = createResponse();
+
+      service.resolveIdentity(createRequest({ 'x-forwarded-proto': 'https' }), response);
+
+      expect((response.cookie as jest.Mock).mock.calls[0]?.[2]).toMatchObject({
+        secure: true,
+      });
     });
   });
 

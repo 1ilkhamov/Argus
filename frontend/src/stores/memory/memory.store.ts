@@ -6,6 +6,8 @@ import { memoryApi } from '@/api/resources/memory.api';
 interface MemoryState {
   facts: MemoryEntryDto[];
   episodes: MemoryEntryDto[];
+  preferences: MemoryEntryDto[];
+  identities: MemoryEntryDto[];
   stats: MemoryStatsResponse | null;
   isLoading: boolean;
   error: string | null;
@@ -21,6 +23,8 @@ interface MemoryState {
 export const useMemoryStore = create<MemoryState>((set, get) => ({
   facts: [],
   episodes: [],
+  preferences: [],
+  identities: [],
   stats: null,
   isLoading: false,
   error: null,
@@ -28,13 +32,17 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
   loadEntries: async () => {
     set({ isLoading: true, error: null });
     try {
-      const [factsRes, episodesRes] = await Promise.all([
+      const [factsRes, episodesRes, preferencesRes, identitiesRes] = await Promise.all([
         memoryApi.listEntries('fact'),
         memoryApi.listEntries('episode'),
+        memoryApi.listEntries('preference'),
+        memoryApi.listEntries('identity'),
       ]);
       set({
         facts: factsRes.entries,
         episodes: episodesRes.entries,
+        preferences: preferencesRes.entries,
+        identities: identitiesRes.entries,
         isLoading: false,
       });
     } catch (error) {
@@ -59,10 +67,13 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
       const entry = await memoryApi.createEntry({ kind, content, category });
       if (kind === 'fact') {
         set({ facts: [entry, ...get().facts] });
-      } else {
+      } else if (kind === 'episode') {
         set({ episodes: [entry, ...get().episodes] });
+      } else if (kind === 'preference') {
+        set({ preferences: [entry, ...get().preferences] });
+      } else if (kind === 'identity') {
+        set({ identities: [entry, ...get().identities] });
       }
-      // Refresh stats after creation
       void get().loadStats();
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Failed to create entry' });
@@ -75,7 +86,10 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
       set({
         facts: get().facts.filter((e) => e.id !== id),
         episodes: get().episodes.filter((e) => e.id !== id),
+        preferences: get().preferences.filter((e) => e.id !== id),
+        identities: get().identities.filter((e) => e.id !== id),
       });
+      void get().loadStats();
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Failed to delete entry' });
     }
@@ -88,7 +102,10 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
       set({
         facts: replace(get().facts),
         episodes: replace(get().episodes),
+        preferences: replace(get().preferences),
+        identities: replace(get().identities),
       });
+      void get().loadStats();
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Failed to update entry' });
     }

@@ -4,7 +4,7 @@ import type { MemoryEntryDto, MemoryKind, MemoryListResponse, MemoryStatsRespons
 
 export const memoryApi = {
   listEntries(kind?: MemoryKind): Promise<MemoryListResponse> {
-    const params = kind ? `?kind=${kind}&limit=200&scopeKey=local:default` : '?limit=200&scopeKey=local:default';
+    const params = kind ? `?kind=${kind}&limit=200` : '?limit=200';
     return apiFetch<MemoryListResponse>(`${API_ENDPOINTS.memory.entries}${params}`);
   },
 
@@ -20,7 +20,7 @@ export const memoryApi = {
   },
 
   getStats(): Promise<MemoryStatsResponse> {
-    return apiFetch<MemoryStatsResponse>(`${API_ENDPOINTS.memory.stats}?scopeKey=local:default`);
+    return apiFetch<MemoryStatsResponse>(API_ENDPOINTS.memory.stats);
   },
 
   createEntry(data: { kind: MemoryKind; content: string; category?: string; pinned?: boolean }): Promise<MemoryEntryDto> {

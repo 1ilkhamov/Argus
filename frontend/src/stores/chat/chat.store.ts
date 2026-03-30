@@ -5,6 +5,28 @@ import { apiStream, apiStreamFormData } from '@/api/http/client';
 import { chatApi } from '@/api/resources/chat.api';
 import { API_ENDPOINTS } from '@/config';
 
+function createClientMessageId(): string {
+  const cryptoObject = globalThis.crypto;
+  if (cryptoObject && typeof cryptoObject.randomUUID === 'function') {
+    return cryptoObject.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (cryptoObject && typeof cryptoObject.getRandomValues === 'function') {
+    cryptoObject.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 interface ChatState {
   conversations: ConversationPreview[];
   currentConversationId: string | null;
@@ -118,7 +140,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { currentConversationId, messages } = get();
 
     const userMessage: Message = {
-      id: crypto.randomUUID(),
+      id: createClientMessageId(),
       role: 'user',
       content,
       createdAt: new Date().toISOString(),
@@ -136,7 +158,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     let transportError: Error | null = null;
 
     const assistantMessage: Message = {
-      id: crypto.randomUUID(),
+      id: createClientMessageId(),
       role: 'assistant',
       content: '',
       createdAt: new Date().toISOString(),
@@ -275,7 +297,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     let transportError: Error | null = null;
 
     const assistantMessage: Message = {
-      id: crypto.randomUUID(),
+      id: createClientMessageId(),
       role: 'assistant',
       content: '',
       createdAt: new Date().toISOString(),
@@ -302,7 +324,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (event.event === 'transcription' && event.data) {
           transcribedText = event.data;
           const userMessage: Message = {
-            id: crypto.randomUUID(),
+            id: createClientMessageId(),
             role: 'user',
             content: transcribedText,
             createdAt: new Date().toISOString(),

@@ -437,6 +437,7 @@ Frontend env-файлы:
 
 - `postgres`
 - `redis`
+- `qdrant`
 - `backend`
 - `frontend`
 
@@ -444,11 +445,15 @@ Frontend env-файлы:
 
 - backend на `http://localhost:3000`
 - frontend на `http://localhost:8080`
+- qdrant на `http://localhost:6333`
 - backend запускается в `production` mode
 - backend использует `STORAGE_DRIVER=postgres`
 - backend использует `RATE_LIMIT_BACKEND=redis`
-- backend ожидает, что auth включён
+- backend использует semantic memory через локальные embeddings + Qdrant
+- backend принимает API keys и умеет fallback на public sessions для browser mode
+- backend доверяет одному reverse-proxy hop (`TRUST_PROXY_HOPS=1`)
 - backend направляет local-style LLM трафик на `http://host.docker.internal:8317/v1`
+- compose включает healthchecks для `postgres`, `redis`, `backend` и `frontend`
 
 ## Тесты и проверка
 

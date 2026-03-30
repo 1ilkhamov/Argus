@@ -275,7 +275,7 @@ export class MemoryV2Controller {
     const { scopeKey: callerScope, role } = req.identity!;
     const scopeKey = (role === 'admin' && queryScopeKey) ? queryScopeKey : callerScope;
     const base = { scopeKey, excludeSuperseded: true };
-    const [total, facts, episodes, actions, learnings, skills, preferences, pinned, longTerm, shortTerm, working] =
+    const [total, facts, episodes, actions, learnings, skills, preferences, identities, pinned, longTerm, shortTerm, working] =
       await Promise.all([
         this.store.count(base),
         this.store.count({ ...base, kinds: ['fact'] }),
@@ -284,13 +284,14 @@ export class MemoryV2Controller {
         this.store.count({ ...base, kinds: ['learning'] }),
         this.store.count({ ...base, kinds: ['skill'] }),
         this.store.count({ ...base, kinds: ['preference'] }),
+        this.store.count({ ...base, kinds: ['identity'] }),
         this.store.count({ ...base, pinned: true }),
         this.store.count({ ...base, horizons: ['long_term'] }),
         this.store.count({ ...base, horizons: ['short_term'] }),
         this.store.count({ ...base, horizons: ['working'] }),
       ]);
 
-    return { total, facts, episodes, actions, learnings, skills, preferences, pinned, longTerm, shortTerm, working };
+    return { total, facts, episodes, actions, learnings, skills, preferences, identities, pinned, longTerm, shortTerm, working };
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────

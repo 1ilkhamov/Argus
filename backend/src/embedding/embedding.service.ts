@@ -97,6 +97,10 @@ export class EmbeddingService implements OnModuleInit {
     return this.dimensions;
   }
 
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
   isAvailable(): boolean {
     if (!this.enabled || !this.available) return false;
     if (this.consecutiveFailures >= FAILURE_THRESHOLD) {

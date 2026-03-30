@@ -43,8 +43,14 @@ describe('HealthService', () => {
       {
         count: jest.fn().mockResolvedValue(5),
       } as unknown as MemoryStoreService,
-      { isAvailable: jest.fn().mockReturnValue(true) } as unknown as EmbeddingService,
-      { isReady: jest.fn().mockReturnValue(true) } as unknown as QdrantVectorService,
+      {
+        isEnabled: jest.fn().mockReturnValue(true),
+        isAvailable: jest.fn().mockReturnValue(true),
+      } as unknown as EmbeddingService,
+      {
+        isConfigured: jest.fn().mockReturnValue(true),
+        isReady: jest.fn().mockReturnValue(true),
+      } as unknown as QdrantVectorService,
       {
         checkHealth: jest.fn().mockResolvedValue({
           status: 'up',
@@ -60,6 +66,8 @@ describe('HealthService', () => {
     expect(payload.status).toBe('ok');
     expect(payload.checks.storage).toEqual({ status: 'up' });
     expect(payload.checks.llm).toEqual({ status: 'up' });
+    expect(payload.checks.embedding).toEqual({ status: 'up' });
+    expect(payload.checks.qdrant).toEqual({ status: 'up' });
     expect(payload).not.toHaveProperty('metrics');
   });
 
@@ -101,8 +109,14 @@ describe('HealthService', () => {
       {
         count: jest.fn().mockResolvedValue(12),
       } as unknown as MemoryStoreService,
-      { isAvailable: jest.fn().mockReturnValue(false) } as unknown as EmbeddingService,
-      { isReady: jest.fn().mockReturnValue(false) } as unknown as QdrantVectorService,
+      {
+        isEnabled: jest.fn().mockReturnValue(true),
+        isAvailable: jest.fn().mockReturnValue(false),
+      } as unknown as EmbeddingService,
+      {
+        isConfigured: jest.fn().mockReturnValue(true),
+        isReady: jest.fn().mockReturnValue(false),
+      } as unknown as QdrantVectorService,
       {
         checkHealth: jest.fn().mockResolvedValue({
           status: 'up',
@@ -118,6 +132,8 @@ describe('HealthService', () => {
     expect(payload.status).toBe('degraded');
     expect(payload.checks.storage.driver).toBe('sqlite');
     expect(payload.checks.llm.error).toBe('upstream unavailable');
+    expect(payload.checks.embedding).toEqual({ status: 'down' });
+    expect(payload.checks.qdrant).toEqual({ status: 'down' });
     expect(payload.metrics.agent).toEqual(agentMetricsSnapshot);
     expect(payload.metrics.memory).toEqual({ totalEntries: 12 });
   });

@@ -12,6 +12,7 @@
 - `CHANGELOG.md` обновлён
 - нет случайных локальных файлов, runtime data и секретов
 - CI зелёный
+- `docker compose config` проходит без ручных правок
 
 ## Локальная проверка
 
@@ -58,6 +59,8 @@ npm run start
 - frontend стартует локально
 - health endpoint отвечает
 - auth-путь работает
+- browser mode через public sessions работает без скрытой proxy-магии
+- semantic memory путь работает с embeddings + Qdrant
 - env examples достаточно полны для нового пользователя
 
 ### 3. Проверка качества
@@ -66,6 +69,7 @@ npm run start
 - lint проходит
 - build проходит
 - CI workflow валиден
+- smoke checks покрывают API-key auth и public-session flow
 
 ### 4. GitHub release
 

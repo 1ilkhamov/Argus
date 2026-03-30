@@ -8,6 +8,17 @@
 
 - Пока без изменений.
 
+## [0.1.4]
+
+### Fixed
+
+- Убрана зависимость от скрытых runtime-правок: frontend memory scope, memory kinds, pinned counts и UUID fallback теперь зафиксированы в исходниках
+- Исправлен self-hosted browser mode: public sessions теперь работают для chat и memory без скрытой proxy-магии
+- Исправлена передача cookie credentials в frontend streaming HTTP client для SSE и form-data запросов
+- Синхронизированы embeddings и Qdrant: runtime сам подхватывает фактическую размерность локальной embedding-модели
+- Усилен runtime health: embeddings и Qdrant теперь различаются как `disabled` и `configured but down`
+- Выровнены Docker/Compose runtime defaults, healthchecks и release-путь, чтобы уменьшить repo/server drift
+
 ## [0.1.3]
 
 ### Fixed

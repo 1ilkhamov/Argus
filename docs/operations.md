@@ -178,6 +178,7 @@ Stop the backend before deleting SQLite files.
 
 - `postgres`
 - `redis`
+- `qdrant`
 - `backend`
 - `frontend`
 
@@ -185,17 +186,22 @@ Compose defaults:
 
 - backend on `http://localhost:3000`
 - frontend on `http://localhost:8080`
+- qdrant on `http://localhost:6333`
 - backend uses `NODE_ENV=production`
 - backend uses `STORAGE_DRIVER=postgres`
 - backend uses `RATE_LIMIT_BACKEND=redis`
-- backend expects auth to be enabled
+- backend enables semantic memory through local embeddings + Qdrant
+- backend accepts API keys and can fall back to public sessions for browser mode
+- backend trusts one reverse-proxy hop with `TRUST_PROXY_HOPS=1`
 - backend points local-style LLM traffic to `http://host.docker.internal:8317/v1`
+- compose includes healthchecks for `postgres`, `redis`, `backend`, and `frontend`
 
 Frontend container notes:
 
 - frontend is built separately from backend
 - frontend receives `API_KEY` and `ADMIN_API_KEY` from Compose environment
 - `/api` traffic is proxied to the backend container
+- browser-mode requests also work without injected API keys when public sessions are enabled
 
 ## Testing and verification
 
@@ -236,6 +242,7 @@ npm run build --prefix frontend
 - If public sessions are used, set `AUTH_PUBLIC_SESSION_SECRET`.
 - If settings store secrets through the Settings API, set `SETTINGS_ENCRYPTION_SECRET`.
 - Embedding-based semantic recall only works when embeddings are enabled and Qdrant is available.
+- In local HTTP setups, public-session cookies only become `Secure` when the request is actually behind HTTPS.
 - Telegram bot and Telegram client are optional and disabled unless configured.
 
 ## What to update when operations change

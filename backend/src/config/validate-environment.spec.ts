@@ -13,21 +13,35 @@ describe('validateEnvironment', () => {
     expect(result.EMBEDDING_ENABLED).toBe('false');
   });
 
-  it('requires embedding model when embedding is enabled', () => {
+  it('requires embedding model when api embeddings are enabled', () => {
     expect(() =>
       validateEnvironment({
         EMBEDDING_ENABLED: 'true',
+        EMBEDDING_PROVIDER: 'api',
       }),
     ).toThrow('EMBEDDING_MODEL must be set when EMBEDDING_ENABLED=true');
+  });
+
+  it('allows local embeddings without EMBEDDING_MODEL', () => {
+    const result = validateEnvironment({
+      EMBEDDING_ENABLED: 'true',
+      EMBEDDING_PROVIDER: 'local',
+    });
+
+    expect(result.EMBEDDING_ENABLED).toBe('true');
+    expect(result.EMBEDDING_PROVIDER).toBe('local');
+    expect(result.EMBEDDING_MODEL).toBe('');
   });
 
   it('accepts embedding config when model is provided', () => {
     const result = validateEnvironment({
       EMBEDDING_ENABLED: 'true',
+      EMBEDDING_PROVIDER: 'api',
       EMBEDDING_MODEL: 'text-embedding-3-small',
     });
 
     expect(result.EMBEDDING_ENABLED).toBe('true');
+    expect(result.EMBEDDING_PROVIDER).toBe('api');
     expect(result.EMBEDDING_MODEL).toBe('text-embedding-3-small');
   });
 

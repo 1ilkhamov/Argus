@@ -27,6 +27,7 @@ const ALLOWED_NODE_ENVS = new Set(['development', 'test', 'production']);
 const ALLOWED_STORAGE_DRIVERS = new Set(['file', 'sqlite', 'postgres']);
 const ALLOWED_RATE_LIMIT_BACKENDS = new Set(['memory', 'sqlite', 'redis']);
 const ALLOWED_LLM_PROVIDERS = new Set<SupportedLlmProvider>(['openai', 'anthropic', 'google', 'local']);
+const ALLOWED_EMBEDDING_PROVIDERS = new Set(['api', 'local']);
 
 function parseInteger(value: string | undefined, fallback: number, key: string): number {
   if (value === undefined || value === '') {
@@ -112,6 +113,7 @@ export function validateEnvironment(config: EnvRecord): EnvRecord {
   const llmApiBase = config.LLM_API_BASE ?? getDefaultLlmApiBase(llmProvider);
   const corsOrigin = config.CORS_ORIGIN ?? DEFAULT_CORS_ORIGIN;
   const embeddingEnabled = parseBoolean(config.EMBEDDING_ENABLED, DEFAULT_EMBEDDING_ENABLED, 'EMBEDDING_ENABLED');
+  const embeddingProvider = (config.EMBEDDING_PROVIDER ?? 'api').trim();
   const embeddingModel = (config.EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODEL).trim();
   const embeddingApiBase = (config.EMBEDDING_API_BASE ?? '').trim();
   const embeddingApiKey = resolveEnvValue(config, 'EMBEDDING_API_KEY') ?? '';
@@ -121,7 +123,11 @@ export function validateEnvironment(config: EnvRecord): EnvRecord {
     'EMBEDDING_DIMENSIONS',
   );
 
-  if (embeddingEnabled && !embeddingModel) {
+  if (!ALLOWED_EMBEDDING_PROVIDERS.has(embeddingProvider)) {
+    throw new Error('EMBEDDING_PROVIDER must be one of api, local');
+  }
+
+  if (embeddingEnabled && embeddingProvider !== 'local' && !embeddingModel) {
     throw new Error('EMBEDDING_MODEL must be set when EMBEDDING_ENABLED=true');
   }
 
@@ -227,6 +233,7 @@ export function validateEnvironment(config: EnvRecord): EnvRecord {
     RATE_LIMIT_STORE_FILE: rateLimitStoreFile,
     RATE_LIMIT_REDIS_URL: rateLimitRedisUrl,
     EMBEDDING_ENABLED: String(embeddingEnabled),
+    EMBEDDING_PROVIDER: embeddingProvider,
     EMBEDDING_MODEL: embeddingModel,
     EMBEDDING_API_BASE: embeddingApiBase,
     EMBEDDING_API_KEY: embeddingApiKey,

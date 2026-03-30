@@ -8,6 +8,15 @@ import { PageHeader, TabBar, PageSearchBar, PageDivider, PageScrollArea, PageFoo
 import type { TabItem } from '@/components/common';
 import type { MemoryEntryDto, MemoryKind } from '@/types/memory.types';
 
+type MemoryTab = 'facts' | 'episodes' | 'preferences' | 'identities';
+
+const TAB_TO_KIND: Record<MemoryTab, MemoryKind> = {
+  facts: 'fact',
+  episodes: 'episode',
+  preferences: 'preference',
+  identities: 'identity',
+};
+
 const CATEGORY_ICONS: Record<string, typeof Target> = {
   goal: Target,
   constraint: ShieldCheck,
@@ -101,7 +110,7 @@ function MemoryCard({ entry, onPin, onDelete, t }: {
   );
 }
 
-function AddEntryForm({ activeTab, t }: { activeTab: 'facts' | 'episodes'; t: (key: TranslationKey) => string }) {
+function AddEntryForm({ activeTab, t }: { activeTab: MemoryTab; t: (key: TranslationKey) => string }) {
   const [content, setContent] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const createEntry = useMemoryStore((s) => s.createEntry);
@@ -109,7 +118,7 @@ function AddEntryForm({ activeTab, t }: { activeTab: 'facts' | 'episodes'; t: (k
   const handleSubmit = async () => {
     const trimmed = content.trim();
     if (!trimmed) return;
-    const kind: MemoryKind = activeTab === 'facts' ? 'fact' : 'episode';
+    const kind = TAB_TO_KIND[activeTab];
     await createEntry(kind, trimmed);
     setContent('');
     setIsOpen(false);
@@ -173,17 +182,17 @@ function AddEntryForm({ activeTab, t }: { activeTab: 'facts' | 'episodes'; t: (k
 
 export function MemoryPanel() {
   const { t } = useLangStore();
-  const [activeTab, setActiveTab] = useState<'facts' | 'episodes'>('facts');
+  const [activeTab, setActiveTab] = useState<MemoryTab>('facts');
   const [searchQuery, setSearchQuery] = useState('');
 
   const {
     facts,
     episodes,
-    stats,
+    preferences,
+    identities,
     isLoading,
     error,
     loadEntries,
-    loadStats,
     deleteEntry,
     pinEntry,
     clearError,
@@ -191,11 +200,11 @@ export function MemoryPanel() {
     useShallow((s) => ({
       facts: s.facts,
       episodes: s.episodes,
-      stats: s.stats,
+      preferences: s.preferences,
+      identities: s.identities,
       isLoading: s.isLoading,
       error: s.error,
       loadEntries: s.loadEntries,
-      loadStats: s.loadStats,
       deleteEntry: s.deleteEntry,
       pinEntry: s.pinEntry,
       clearError: s.clearError,
@@ -204,11 +213,26 @@ export function MemoryPanel() {
 
   useEffect(() => {
     loadEntries();
-    loadStats();
-  }, [loadEntries, loadStats]);
+  }, [loadEntries]);
 
-  const rawEntries = activeTab === 'facts' ? facts : episodes;
-  const emptyLabel = activeTab === 'facts' ? t('memory.noFacts') : t('memory.noEpisodes');
+  const allVisibleEntries = useMemo(
+    () => [...facts, ...episodes, ...preferences, ...identities],
+    [facts, episodes, preferences, identities],
+  );
+
+  const rawEntries = {
+    facts,
+    episodes,
+    preferences,
+    identities,
+  }[activeTab];
+
+  const emptyLabel = {
+    facts: t('memory.noFacts'),
+    episodes: t('memory.noEpisodes'),
+    preferences: t('memory.noPreferences'),
+    identities: t('memory.noIdentities'),
+  }[activeTab];
 
   const filteredEntries = useMemo(() => {
     if (!searchQuery.trim()) return rawEntries;
@@ -220,13 +244,18 @@ export function MemoryPanel() {
     );
   }, [rawEntries, searchQuery]);
 
-  const subtitle = stats
-    ? `${t('memory.total')}: ${stats.total} · ${t('memory.pinnedCount')}: ${stats.pinned}`
-    : undefined;
+  const visiblePinnedCount = useMemo(
+    () => allVisibleEntries.filter((entry) => entry.pinned).length,
+    [allVisibleEntries],
+  );
 
-  const tabItems: TabItem<'facts' | 'episodes'>[] = [
+  const subtitle = `${t('memory.total')}: ${allVisibleEntries.length} · ${t('memory.pinnedCount')}: ${visiblePinnedCount}`;
+
+  const tabItems: TabItem<MemoryTab>[] = [
     { key: 'facts', label: t('memory.facts'), count: facts.length },
     { key: 'episodes', label: t('memory.episodes'), count: episodes.length },
+    { key: 'preferences', label: t('memory.preferences'), count: preferences.length },
+    { key: 'identities', label: t('memory.identities'), count: identities.length },
   ];
 
   return (
