@@ -84,8 +84,8 @@ export class FileChatRepository extends ChatRepository {
 
       if (deleted) {
         await this.fileStoreService.writeStore({
+          ...store,
           conversations: nextConversations,
-          userProfiles: store.userProfiles,
         });
       }
     });

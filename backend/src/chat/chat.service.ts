@@ -22,15 +22,19 @@ import { LlmService } from '../llm/llm.service';
 import type { LlmMessage, LlmStreamChunk } from '../llm/interfaces/llm.interface';
 import { ToolOrchestratorService } from '../tools/core/tool-orchestrator.service';
 import type { ToolExecutionContext } from '../tools/core/tool.types';
-import { ConversationalMemoryCommandService } from '../memory/commands/command.service';
 import { ArchiveChatRetrieverService } from '../memory/archive/archive-chat-retriever.service';
+import { ConversationalMemoryCommandService } from '../memory/conversational-memory-command.service';
+import type { EpisodicMemoryEntry } from '../memory/episodic-memory.types';
 import {
   resolveMemoryGroundingContext,
   type MemoryGroundingContext,
 } from '../memory/grounding/grounding-policy';
 import type { RecalledMemory } from '../memory/core/memory-entry.types';
+import { MemoryResolverService } from '../memory/memory-resolver.service';
+import type { ResolvedUserMemoryContext } from '../memory/memory.types';
 import { AutoRecallService } from '../memory/recall/auto-recall.service';
 import { AutoCaptureService } from '../memory/capture/pipeline/auto-capture.service';
+import type { UserProfileFact } from '../memory/user-profile-facts.types';
 import { IdentityCaptureService } from '../agent/identity/capture/identity-capture.service';
 import { IdentityRecallService, type RecalledIdentityTrait } from '../agent/identity/recall/identity-recall.service';
 import { SelfModelService } from '../agent/identity/reflection/self-model.service';
@@ -68,6 +72,7 @@ type TurnContext = {
   memoryGrounding: MemoryGroundingContext;
   needsBufferedCompletion: boolean;
   recalledMemories: RecalledMemory[];
+  resolvedUserMemory?: ResolvedUserMemoryContext;
   userMessageContent: string;
 };
 
@@ -99,6 +104,7 @@ export class ChatService {
   constructor(
     private readonly modeSelector: ModeSelector,
     private readonly userProfileService: UserProfileService,
+    private readonly memoryResolverService: MemoryResolverService,
     private readonly conversationalMemoryCommandService: ConversationalMemoryCommandService,
     private readonly responseDirectivesService: ResponseDirectivesService,
     private readonly turnResponseValidator: TurnResponseValidatorService,
@@ -202,6 +208,7 @@ export class ChatService {
     });
     turnContext.conversation.addMessage(assistantMessage);
     await this.chatRepository.saveConversation(turnContext.conversation);
+    await this.commitManagedMemory(turnContext.resolvedUserMemory);
 
     // Memory v2: fire-and-forget auto-capture
     this.fireAndForgetCapture(turnContext.userMessageContent, resultContent, turnContext.conversation.id, assistantMessage.id, profileContext.scopeKey);
@@ -286,6 +293,7 @@ export class ChatService {
       });
       turnContext.conversation.addMessage(assistantMessage);
       await this.chatRepository.saveConversation(turnContext.conversation);
+      await this.commitManagedMemory(turnContext.resolvedUserMemory);
 
       // Memory v2: fire-and-forget auto-capture
       this.fireAndForgetCapture(turnContext.userMessageContent, bufferedContent, turnContext.conversation.id, messageId, profileContext.scopeKey);
@@ -324,6 +332,7 @@ export class ChatService {
     });
     turnContext.conversation.addMessage(assistantMessage);
     await this.chatRepository.saveConversation(turnContext.conversation);
+    await this.commitManagedMemory(turnContext.resolvedUserMemory);
 
     // Memory v2: fire-and-forget auto-capture
     // Skip if memory_manage tool was used — it already handled memory explicitly,
@@ -363,11 +372,25 @@ export class ChatService {
       });
   }
 
+  private async commitManagedMemory(resolvedUserMemory?: ResolvedUserMemoryContext): Promise<void> {
+    if (!resolvedUserMemory) {
+      return;
+    }
+
+    try {
+      await this.memoryResolverService.commitResolvedUserMemory(resolvedUserMemory);
+    } catch (err) {
+      this.logger.warn(`Managed memory commit failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   private buildMessages(
     conversation: Conversation,
     mode: AgentModeId,
     userProfile: AgentUserProfile,
     userProfileSource: AgentUserProfileSource,
+    userFacts: UserProfileFact[],
+    episodicMemories: EpisodicMemoryEntry[],
     recalledMemories: RecalledMemory[],
     identityTraits: RecalledIdentityTrait[],
     selfModelRaw: string,
@@ -379,6 +402,8 @@ export class ChatService {
     const history = conversation.getMessageHistory();
     const buildOptions = {
       userProfileSource,
+      userFacts,
+      episodicMemories,
       recalledMemories,
       identityTraits,
       selfModelRaw,
@@ -415,9 +440,9 @@ export class ChatService {
     conversation.addMessage(userMessage);
     this.autoGenerateTitle(conversation, content);
 
-    const commandResult = await this.conversationalMemoryCommandService.handle(content, profileContext.scopeKey);
-    if (commandResult.handled && commandResult.operationNote) {
-      return { commandHandled: true, conversation, operationNote: commandResult.operationNote };
+    const commandResult = await this.conversationalMemoryCommandService.handle(content, conversation);
+    if (commandResult.handled) {
+      return { commandHandled: true, conversation, operationNote: commandResult.response ?? '' };
     }
 
     const turnContext = await this.prepareTurnContext(conversation, content, profileContext);
@@ -445,15 +470,17 @@ export class ChatService {
     }
 
     const resolvedMode = this.resolveMode(activeConversation, profileContext);
-    const userProfile = this.userProfileService.resolveProfile(activeConversation);
-    const userProfileSource: AgentUserProfileSource = 'recent_context';
     const requestedResponseDirectives = this.responseDirectivesService.resolve(content);
 
     // Memory v2: auto-recall + identity recall + self-model + archive evidence (all in parallel)
     // Strip metadata prefixes like "[From: Name]\n" so recall searches on clean text
     const recallQuery = content.replace(/^\[From:\s*[^\]]*\]\s*\n?/i, '').trim() || content;
 
-    const [archiveEvidence, recalledMemories, identityRecallResult, selfModelSummary] = await Promise.all([
+    const [resolvedUserMemory, archiveEvidence, recalledMemories, identityRecallResult, selfModelSummary] = await Promise.all([
+      this.memoryResolverService.resolveUserMemory(activeConversation).catch((err) => {
+        this.logger.warn(`Managed memory resolution failed: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      }),
       this.archiveChatRetrieverService.retrieveEvidence(activeConversation, { limit: 6 }),
       this.autoRecallService.recall(recallQuery, { limit: 10 }).catch((err) => {
         this.logger.warn(`Auto-recall failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -471,13 +498,22 @@ export class ChatService {
     const identityTraits = identityRecallResult.traits;
     const selfModelRaw = selfModelSummary.raw;
 
-    const memoryGrounding = resolveMemoryGroundingContext(content, recalledMemories, archiveEvidence);
+    const userProfile = resolvedUserMemory?.interactionPreferences.userProfile ?? this.userProfileService.resolveProfile(activeConversation);
+    const userProfileSource: AgentUserProfileSource =
+      resolvedUserMemory?.interactionPreferences.source ?? 'recent_context';
+    const userFacts = resolvedUserMemory?.userFacts.facts ?? [];
+    const episodicMemories = resolvedUserMemory?.episodicMemory.relevantEntries ?? [];
+    const memoryGrounding = resolveMemoryGroundingContext(content, recalledMemories, archiveEvidence, {
+      structuredMemoryCount: userFacts.length + episodicMemories.length,
+    });
     const responseDirectives = this.applyMemoryGroundingDirectives(requestedResponseDirectives, memoryGrounding);
     const messages = this.buildMessages(
       activeConversation,
       resolvedMode.mode,
       userProfile,
       userProfileSource,
+      userFacts,
+      episodicMemories,
       recalledMemories,
       identityTraits,
       selfModelRaw,
@@ -497,7 +533,7 @@ export class ChatService {
     });
 
     this.logger.debug(
-      `Turn context: mode=${resolvedMode.mode} (${resolvedMode.source}), recalled=${recalledMemories.length}, identity=${identityTraits.length}, selfModel=${selfModelRaw.length > 0 ? 'yes' : 'no'}, archive=${archiveEvidence.length}, grounding=${memoryGrounding.evidenceStrength}`,
+      `Turn context: mode=${resolvedMode.mode} (${resolvedMode.source}), managedFacts=${userFacts.length}, managedEpisodes=${episodicMemories.length}, recalled=${recalledMemories.length}, identity=${identityTraits.length}, selfModel=${selfModelRaw.length > 0 ? 'yes' : 'no'}, archive=${archiveEvidence.length}, grounding=${memoryGrounding.evidenceStrength}`,
     );
 
     return {
@@ -510,6 +546,7 @@ export class ChatService {
       memoryGrounding,
       needsBufferedCompletion,
       recalledMemories,
+      resolvedUserMemory,
       userMessageContent: content,
     };
   }

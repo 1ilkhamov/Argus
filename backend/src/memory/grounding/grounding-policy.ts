@@ -131,6 +131,7 @@ export function resolveMemoryGroundingContext(
   content: string,
   recalledMemories: RecalledMemory[],
   archiveEvidence: ArchivedChatEvidenceItem[],
+  options: { structuredMemoryCount?: number } = {},
 ): MemoryGroundingContext {
   const normalized = content.trim();
 
@@ -145,14 +146,15 @@ export function resolveMemoryGroundingContext(
     return EMPTY_MEMORY_GROUNDING_CONTEXT;
   }
 
-  const hasStructuredEvidence = recalledMemories.length > 0;
+  const structuredMemoryCount = recalledMemories.length + (options.structuredMemoryCount ?? 0);
+  const hasStructuredEvidence = structuredMemoryCount > 0;
   const hasArchiveEvidence = archiveEvidence.length > 0;
 
   return {
     isMemoryQuestion: true,
     intent,
     evidenceStrength: resolveEvidenceStrength(hasStructuredEvidence, hasArchiveEvidence),
-    recalledMemoryCount: recalledMemories.length,
+    recalledMemoryCount: structuredMemoryCount,
     archiveEvidenceCount: archiveEvidence.length,
     shouldUseUncertaintyFirst: !hasStructuredEvidence && !hasArchiveEvidence,
   };

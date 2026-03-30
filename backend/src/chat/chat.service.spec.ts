@@ -13,9 +13,11 @@ import { LlmService } from '../llm/llm.service';
 import {
   ConversationalMemoryCommandService,
   type ConversationalMemoryCommandResult,
-} from '../memory/commands/command.service';
+} from '../memory/conversational-memory-command.service';
 import type { ArchivedChatEvidenceItem } from '../memory/archive/archive-chat-retrieval.types';
 import { ArchiveChatRetrieverService } from '../memory/archive/archive-chat-retriever.service';
+import { MemoryResolverService } from '../memory/memory-resolver.service';
+import type { ResolvedUserMemoryContext } from '../memory/memory.types';
 import { AutoRecallService } from '../memory/recall/auto-recall.service';
 import { AutoCaptureService } from '../memory/capture/pipeline/auto-capture.service';
 import { IdentityCaptureService } from '../agent/identity/capture/identity-capture.service';
@@ -43,6 +45,31 @@ const defaultUserProfile: AgentUserProfile = {
 
 const createUserProfileService = (profile: AgentUserProfile = defaultUserProfile) => ({
   resolveProfile: jest.fn().mockReturnValue(profile),
+});
+
+const defaultResolvedUserMemory: ResolvedUserMemoryContext = {
+  interactionPreferences: {
+    keyKind: 'local_default',
+    source: 'recent_context',
+    userProfile: defaultUserProfile,
+  },
+  userFacts: {
+    scopeKey: 'local:default',
+    source: 'recent_context',
+    facts: [],
+    storedFacts: [],
+  },
+  episodicMemory: {
+    scopeKey: 'local:default',
+    source: 'recent_context',
+    entries: [],
+    relevantEntries: [],
+  },
+};
+
+const createMemoryResolverService = (resolvedUserMemory: ResolvedUserMemoryContext = defaultResolvedUserMemory) => ({
+  resolveUserMemory: jest.fn().mockResolvedValue(resolvedUserMemory),
+  commitResolvedUserMemory: jest.fn().mockResolvedValue(undefined),
 });
 
 const createArchiveChatRetrieverService = (evidence: ArchivedChatEvidenceItem[] = []) => ({
@@ -117,6 +144,7 @@ const createToolOrchestrator = () => ({
 const buildService = (overrides: {
   modeSelector?: unknown;
   userProfileService?: unknown;
+  memoryResolverService?: unknown;
   conversationalMemoryCommandService?: unknown;
   responseDirectivesService?: unknown;
   turnResponseValidator?: unknown;
@@ -137,6 +165,7 @@ const buildService = (overrides: {
   new ChatService(
     (overrides.modeSelector ?? { selectMode: jest.fn().mockReturnValue('assistant') }) as ModeSelector,
     (overrides.userProfileService ?? createUserProfileService()) as UserProfileService,
+    (overrides.memoryResolverService ?? createMemoryResolverService()) as MemoryResolverService,
     (overrides.conversationalMemoryCommandService ?? createConversationalMemoryCommandService()) as ConversationalMemoryCommandService,
     (overrides.responseDirectivesService ?? createResponseDirectivesService()) as ResponseDirectivesService,
     (overrides.turnResponseValidator ?? createTurnResponseValidator()) as TurnResponseValidatorService,
@@ -160,6 +189,7 @@ describe('ChatService', () => {
     const { conversation, repository } = createRepository();
     const selectModeMock = jest.fn().mockReturnValue('assistant');
     const userProfileService = createUserProfileService();
+    const memoryResolverService = createMemoryResolverService();
     const buildMock = jest.fn().mockReturnValue('system prompt');
     const agentMetricsService = createAgentMetricsService();
     const turnResponseValidator = createTurnResponseValidator();
@@ -168,6 +198,7 @@ describe('ChatService', () => {
     const service = buildService({
       modeSelector: { selectMode: selectModeMock },
       userProfileService,
+      memoryResolverService,
       systemPromptBuilder: { build: buildMock },
       agentMetricsService,
       turnResponseValidator,
@@ -179,11 +210,13 @@ describe('ChatService', () => {
 
     expect(selectModeMock).toHaveBeenCalledTimes(1);
     expect(selectModeMock).toHaveBeenCalledWith(conversation);
-    expect(userProfileService.resolveProfile).toHaveBeenCalledTimes(1);
-    expect(userProfileService.resolveProfile).toHaveBeenCalledWith(conversation);
+    expect(memoryResolverService.resolveUserMemory).toHaveBeenCalledTimes(1);
+    expect(memoryResolverService.resolveUserMemory).toHaveBeenCalledWith(conversation);
     expect(buildMock).toHaveBeenCalledTimes(1);
     expect(buildMock).toHaveBeenCalledWith('assistant', defaultUserProfile, expect.objectContaining({
       userProfileSource: 'recent_context',
+      userFacts: [],
+      episodicMemories: [],
       recalledMemories: [],
       archiveEvidence: [],
     }));
@@ -197,6 +230,7 @@ describe('ChatService', () => {
     expect(result.assistantMessage.content).toBe('assistant reply');
     expect(conversation.messages).toHaveLength(2);
     expect(repository.saveConversation).toHaveBeenCalledTimes(1);
+    expect(memoryResolverService.commitResolvedUserMemory).toHaveBeenCalledWith(defaultResolvedUserMemory);
     expect(agentMetricsService.recordResolution).toHaveBeenCalledWith({
       mode: 'assistant',
       modeSource: 'inferred',
@@ -210,6 +244,7 @@ describe('ChatService', () => {
     const { conversation, repository } = createRepository();
     const selectModeMock = jest.fn().mockReturnValue('assistant');
     const userProfileService = createUserProfileService();
+    const memoryResolverService = createMemoryResolverService();
     const buildMock = jest.fn().mockReturnValue('system prompt');
     const agentMetricsService = createAgentMetricsService();
     const llmChunks: LlmStreamChunk[] = [
@@ -228,6 +263,7 @@ describe('ChatService', () => {
     const service = buildService({
       modeSelector: { selectMode: selectModeMock },
       userProfileService,
+      memoryResolverService,
       systemPromptBuilder: { build: buildMock },
       agentMetricsService,
       llmService: { complete: jest.fn(), stream: streamMock },
@@ -242,9 +278,11 @@ describe('ChatService', () => {
 
     expect(selectModeMock).toHaveBeenCalledTimes(1);
     expect(selectModeMock).toHaveBeenCalledWith(conversation);
-    expect(userProfileService.resolveProfile).toHaveBeenCalledWith(conversation);
+    expect(memoryResolverService.resolveUserMemory).toHaveBeenCalledWith(conversation);
     expect(buildMock).toHaveBeenCalledWith('assistant', defaultUserProfile, expect.objectContaining({
       userProfileSource: 'recent_context',
+      userFacts: [],
+      episodicMemories: [],
       recalledMemories: [],
       archiveEvidence: [],
     }));
@@ -259,6 +297,7 @@ describe('ChatService', () => {
     expect(conversation.messages[1]?.content).toBe('Hello world');
     // Called twice: once before stream (persist user message), once after (persist assistant reply)
     expect(repository.saveConversation).toHaveBeenCalledTimes(2);
+    expect(memoryResolverService.commitResolvedUserMemory).toHaveBeenCalledWith(defaultResolvedUserMemory);
     expect(agentMetricsService.recordResolution).toHaveBeenCalledWith({
       mode: 'assistant',
       modeSource: 'inferred',
@@ -286,6 +325,8 @@ describe('ChatService', () => {
     expect(selectModeMock).not.toHaveBeenCalled();
     expect(buildMock).toHaveBeenCalledWith('strategist', defaultUserProfile, expect.objectContaining({
       userProfileSource: 'recent_context',
+      userFacts: [],
+      episodicMemories: [],
       recalledMemories: [],
       archiveEvidence: [],
     }));
@@ -304,7 +345,7 @@ describe('ChatService', () => {
     const operationNote = 'Memory snapshot: 3 entries stored.';
     const conversationalMemoryCommandService = createConversationalMemoryCommandService({
       handled: true,
-      operationNote,
+      response: operationNote,
     });
 
     const service = buildService({
@@ -315,7 +356,7 @@ describe('ChatService', () => {
 
     const result = await service.sendMessage(undefined, 'Show memory snapshot');
 
-    expect(conversationalMemoryCommandService.handle).toHaveBeenCalledWith('Show memory snapshot', undefined);
+    expect(conversationalMemoryCommandService.handle).toHaveBeenCalledWith('Show memory snapshot', expect.any(Conversation));
     expect(completeMock).not.toHaveBeenCalled();
     expect(result.assistantMessage.content).toBe(operationNote);
   });
@@ -326,7 +367,7 @@ describe('ChatService', () => {
     const operationNote = 'I forgot your stored project fact.';
     const conversationalMemoryCommandService = createConversationalMemoryCommandService({
       handled: true,
-      operationNote,
+      response: operationNote,
     });
 
     const service = buildService({
@@ -340,7 +381,7 @@ describe('ChatService', () => {
       emitted.push(item);
     }
 
-    expect(conversationalMemoryCommandService.handle).toHaveBeenCalledWith('Forget my project', undefined);
+    expect(conversationalMemoryCommandService.handle).toHaveBeenCalledWith('Forget my project', expect.any(Conversation));
     expect(streamMock).not.toHaveBeenCalled();
     expect(emitted).toHaveLength(2);
     expect(emitted[0]?.chunk.content).toBe(operationNote);
@@ -378,6 +419,8 @@ describe('ChatService', () => {
     expect(responseDirectivesService.resolve).toHaveBeenCalledWith('что такое eventual consistency?');
     expect(buildMock).toHaveBeenCalledWith('assistant', defaultUserProfile, expect.objectContaining({
       userProfileSource: 'recent_context',
+      userFacts: [],
+      episodicMemories: [],
       recalledMemories: [],
       archiveEvidence: [],
       responseDirectives: directives,

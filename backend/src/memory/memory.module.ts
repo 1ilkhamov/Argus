@@ -44,7 +44,15 @@ import { MemoryV2Controller } from './api/memory-v2.controller';
 
 // ─── Archive + Commands ─────────────────────────────────────────────────────
 import { ArchiveChatRetrieverService } from './archive/archive-chat-retriever.service';
-import { ConversationalMemoryCommandService } from './commands/command.service';
+import { ConversationalMemoryCommandService } from './conversational-memory-command.service';
+import { EpisodicMemoryExtractorService } from './episodic-memory-extractor.service';
+import { EpisodicMemoryLifecycleService } from './episodic-memory-lifecycle.service';
+import { EpisodicMemoryRetrieverService } from './episodic-memory-retriever.service';
+import { MemoryManagementService } from './memory-management.service';
+import { MemoryResolverService } from './memory-resolver.service';
+import { MemoryService } from './memory.service';
+import { UserFactsExtractorService } from './user-facts-extractor.service';
+import { UserFactsLifecycleService } from './user-facts-lifecycle.service';
 
 @Module({
   imports: [AgentModule, EmbeddingModule, LlmModule, StorageModule],
@@ -66,6 +74,14 @@ import { ConversationalMemoryCommandService } from './commands/command.service';
     MemoryLifecycleV2Service,
     MemoryLifecycleSchedulerService,
     ArchiveChatRetrieverService,
+    MemoryService,
+    UserFactsExtractorService,
+    UserFactsLifecycleService,
+    EpisodicMemoryExtractorService,
+    EpisodicMemoryLifecycleService,
+    EpisodicMemoryRetrieverService,
+    MemoryManagementService,
+    MemoryResolverService,
     ConversationalMemoryCommandService,
     MemoryToolsService,
     ActionLoggerService,
@@ -88,6 +104,9 @@ import { ConversationalMemoryCommandService } from './commands/command.service';
     KgAutoUpdateService,
     MemoryLifecycleV2Service,
     ArchiveChatRetrieverService,
+    MemoryService,
+    MemoryManagementService,
+    MemoryResolverService,
     ConversationalMemoryCommandService,
     MemoryToolsService,
     ActionLoggerService,

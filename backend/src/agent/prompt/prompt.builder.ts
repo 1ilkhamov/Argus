@@ -17,6 +17,7 @@ import {
 import {
   buildArchiveEvidenceSection,
   buildCoreIdentitySection,
+  buildEpisodicMemorySection,
   buildIdentitySection,
   buildMemoryGroundingSection,
   buildModeSection,
@@ -25,18 +26,23 @@ import {
   buildSelfModelSection,
   buildTruthfulnessSection,
   buildTurnDirectiveSection,
+  buildUserFactsSection,
   buildUserProfileSection,
   resolveEffectiveVerbosity,
   type SystemPromptContext,
 } from './sections';
 import { EMPTY_RESPONSE_DIRECTIVES, type ResponseDirectives } from '../response-directives/response-directives.types';
+import type { EpisodicMemoryEntry } from '../../memory/episodic-memory.types';
 import type { RecalledMemory } from '../../memory/core/memory-entry.types';
 import type { RecalledIdentityTrait } from '../identity/recall/identity-recall.service';
 import type { ArchivedChatEvidenceItem } from '../../memory/archive/archive-chat-retrieval.types';
 import { EMPTY_MEMORY_GROUNDING_CONTEXT, type MemoryGroundingContext } from '../../memory/grounding/grounding-policy';
+import type { UserProfileFact } from '../../memory/user-profile-facts.types';
 
 export interface SystemPromptBuildOptions {
   userProfileSource?: AgentUserProfileSource;
+  userFacts?: UserProfileFact[];
+  episodicMemories?: EpisodicMemoryEntry[];
   recalledMemories?: RecalledMemory[];
   identityTraits?: RecalledIdentityTrait[];
   selfModelRaw?: string;
@@ -94,6 +100,8 @@ export class SystemPromptBuilder {
       effectiveVerbosity,
       userProfile,
       userProfileSource,
+      userFacts: options.userFacts ?? [],
+      episodicMemories: options.episodicMemories ?? [],
       recalledMemories: options.recalledMemories ?? [],
       archiveEvidence,
       memoryGrounding,
@@ -110,6 +118,8 @@ export class SystemPromptBuilder {
       ...buildModeSection(context),
       ...buildUserProfileSection(context),
       ...buildTurnDirectiveSection(context),
+      ...buildUserFactsSection(context.userFacts),
+      ...buildEpisodicMemorySection(context.episodicMemories),
       ...buildRecalledMemorySection(context.recalledMemories),
       ...buildArchiveEvidenceSection(context.archiveEvidence, this.archiveEvidenceMaxItems, this.archiveEvidenceMaxTotalChars),
       ...buildMemoryGroundingSection(context.memoryGrounding),

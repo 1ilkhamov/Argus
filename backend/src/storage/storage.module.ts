@@ -6,6 +6,10 @@ import { FileChatRepository } from '../chat/repositories/file-chat.repository';
 import { PostgresChatRepository } from '../chat/repositories/postgres-chat.repository';
 import { SqliteChatRepository } from '../chat/repositories/sqlite-chat.repository';
 import { MEMORY_ENTRY_REPOSITORY } from '../memory/core/memory-entry.repository';
+import { MEMORY_REPOSITORY } from '../memory/repositories/memory.repository';
+import { FileMemoryRepository } from '../memory/repositories/file-memory.repository';
+import { PostgresMemoryRepository } from '../memory/repositories/postgres-memory.repository';
+import { SqliteMemoryRepository } from '../memory/repositories/sqlite-memory.repository';
 import { KNOWLEDGE_GRAPH_REPOSITORY } from '../memory/knowledge-graph/repositories/knowledge-graph.repository';
 import { PostgresKnowledgeGraphRepository } from '../memory/knowledge-graph/repositories/postgres-knowledge-graph.repository';
 import { SqliteKnowledgeGraphRepository } from '../memory/knowledge-graph/repositories/sqlite-knowledge-graph.repository';
@@ -21,6 +25,9 @@ import { PostgresConnectionService } from './postgres-connection.service';
     FileChatRepository,
     PostgresChatRepository,
     SqliteChatRepository,
+    FileMemoryRepository,
+    PostgresMemoryRepository,
+    SqliteMemoryRepository,
     PostgresMemoryEntryRepository,
     SqliteMemoryEntryRepository,
     PostgresKnowledgeGraphRepository,
@@ -62,6 +69,27 @@ import { PostgresConnectionService } from './postgres-connection.service';
       },
     },
     {
+      provide: MEMORY_REPOSITORY,
+      inject: [ConfigService, FileMemoryRepository, SqliteMemoryRepository, PostgresMemoryRepository],
+      useFactory: (
+        configService: ConfigService,
+        fileRepository: FileMemoryRepository,
+        sqliteRepository: SqliteMemoryRepository,
+        postgresRepository: PostgresMemoryRepository,
+      ) => {
+        const storageDriver = configService.get<string>('storage.driver', 'sqlite');
+        if (storageDriver === 'file') {
+          return fileRepository;
+        }
+
+        if (storageDriver === 'postgres') {
+          return postgresRepository;
+        }
+
+        return sqliteRepository;
+      },
+    },
+    {
       provide: MEMORY_ENTRY_REPOSITORY,
       inject: [ConfigService, SqliteMemoryEntryRepository, PostgresMemoryEntryRepository],
       useFactory: (
@@ -83,12 +111,16 @@ import { PostgresConnectionService } from './postgres-connection.service';
     FileChatRepository,
     PostgresChatRepository,
     SqliteChatRepository,
+    FileMemoryRepository,
+    PostgresMemoryRepository,
+    SqliteMemoryRepository,
     PostgresMemoryEntryRepository,
     SqliteMemoryEntryRepository,
     PostgresKnowledgeGraphRepository,
     SqliteKnowledgeGraphRepository,
     KNOWLEDGE_GRAPH_REPOSITORY,
     CHAT_REPOSITORY,
+    MEMORY_REPOSITORY,
     MEMORY_ENTRY_REPOSITORY,
   ],
 })

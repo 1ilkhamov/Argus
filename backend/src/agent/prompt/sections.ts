@@ -16,8 +16,10 @@ import {
   type ResponseDirectives,
 } from '../response-directives/response-directives.types';
 import type { ArchivedChatEvidenceItem } from '../../memory/archive/archive-chat-retrieval.types';
+import type { EpisodicMemoryEntry } from '../../memory/episodic-memory.types';
 import type { MemoryGroundingContext } from '../../memory/grounding/grounding-policy';
 import type { RecalledMemory } from '../../memory/core/memory-entry.types';
+import type { UserProfileFact } from '../../memory/user-profile-facts.types';
 
 /* ------------------------------------------------------------------ */
 /*  Shared context type (mirrors builder's internal context)          */
@@ -29,6 +31,8 @@ export interface SystemPromptContext {
   effectiveVerbosity: 'adaptive' | 'concise' | 'detailed';
   userProfile: AgentUserProfile;
   userProfileSource: AgentUserProfileSource;
+  userFacts: UserProfileFact[];
+  episodicMemories: EpisodicMemoryEntry[];
   recalledMemories: RecalledMemory[];
   archiveEvidence: ArchivedChatEvidenceItem[];
   memoryGrounding: MemoryGroundingContext;
@@ -154,6 +158,28 @@ export function buildTurnDirectiveSection(context: SystemPromptContext): string[
   }
 
   return rules;
+}
+
+export function buildUserFactsSection(userFacts: UserProfileFact[]): string[] {
+  if (userFacts.length === 0) {
+    return [];
+  }
+
+  return [
+    `Known user facts: ${userFacts.map((fact) => `${fact.key}=${fact.value}`).join('; ')}.`,
+    'Use known user facts only when they are relevant to the current request. Do not infer additional biography, persistence scope, or hidden context beyond what is explicitly established.',
+  ];
+}
+
+export function buildEpisodicMemorySection(episodicMemories: EpisodicMemoryEntry[]): string[] {
+  if (episodicMemories.length === 0) {
+    return [];
+  }
+
+  return [
+    `Relevant conversation memory: ${episodicMemories.map((entry) => `${entry.kind}=${entry.summary}`).join('; ')}.`,
+    'Use relevant conversation memory only when it materially helps with the current request. Treat it as lightweight prior context, not as a license to invent hidden state or claim more certainty than the stored memory supports.',
+  ];
 }
 
 export function buildRecalledMemorySection(recalledMemories: RecalledMemory[]): string[] {
