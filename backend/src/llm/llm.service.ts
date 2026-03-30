@@ -104,7 +104,7 @@ type ClassifiedLlmError = {
 };
 
 const COMPLETION_TIMEOUT_MS = parseInt(process.env.LLM_COMPLETION_TIMEOUT_MS ?? '45000', 10);
-const STREAM_TIMEOUT_MS = 90_000;
+const STREAM_TIMEOUT_MS = parseInt(process.env.LLM_STREAM_TIMEOUT_MS ?? '90000', 10);
 const EARLY_STREAM_RETRY_ATTEMPTS = 1;
 
 @Injectable()
