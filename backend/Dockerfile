@@ -8,8 +8,10 @@ RUN npm run build
 FROM node:22-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY package*.json ./
 RUN npm ci --omit=dev
+RUN npx playwright install --with-deps chromium
 COPY --from=builder /app/dist ./dist
 COPY .env.example ./.env.example
 RUN mkdir -p /app/data
