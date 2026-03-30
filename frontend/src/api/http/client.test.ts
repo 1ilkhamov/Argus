@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { apiFetch, apiStream, ApiError } from './client';
+import { apiFetch, apiStream, apiStreamFormData, ApiError } from './client';
 
 const createMockResponse = (options: {
   ok?: boolean;
@@ -53,6 +53,7 @@ function createSseStream(events: string[]): ReadableStream<Uint8Array> {
 describe('apiFetch', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns parsed JSON on success', async () => {
@@ -146,11 +147,25 @@ describe('apiFetch', () => {
     const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(init?.credentials).toBe('include');
   });
+
+  it('includes X-API-Key header when VITE_API_KEY is configured', async () => {
+    vi.stubEnv('VITE_API_KEY', 'test-key');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      createMockResponse({ json: {} }),
+    );
+
+    await apiFetch('/test');
+
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = init?.headers as Record<string, string>;
+    expect(headers['X-API-Key']).toBe('test-key');
+  });
 });
 
 describe('apiStream', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('parses SSE tokens and calls onChunk for each event', async () => {
@@ -288,5 +303,39 @@ describe('apiStream', () => {
 
     expect(chunks).toHaveLength(2);
     expect(chunks[0]).toEqual({ event: 'token', data: 'Hi' });
+  });
+
+  it('includes X-API-Key header when VITE_API_KEY is configured', async () => {
+    vi.stubEnv('VITE_API_KEY', 'test-key');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      createMockResponse({ body: createSseStream([JSON.stringify({ event: 'done', data: '' })]) }),
+    );
+
+    await apiStream('/stream', { content: 'hi' }, () => {}, () => {}, () => {});
+
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = init?.headers as Record<string, string>;
+    expect(headers['X-API-Key']).toBe('test-key');
+  });
+});
+
+describe('apiStreamFormData', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('includes X-API-Key header for form-data streaming requests when configured', async () => {
+    vi.stubEnv('VITE_API_KEY', 'test-key');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      createMockResponse({ body: createSseStream([JSON.stringify({ event: 'done', data: '' })]) }),
+    );
+
+    await apiStreamFormData('/stream', new FormData(), () => {}, () => {}, () => {});
+
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = init?.headers as Record<string, string>;
+    expect(headers['X-API-Key']).toBe('test-key');
+    expect(init?.credentials).toBe('include');
   });
 });

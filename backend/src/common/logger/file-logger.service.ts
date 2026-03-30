@@ -31,6 +31,10 @@ function formatLine(level: string, message: unknown, context?: string): string {
   return `${timestamp()} ${level.toUpperCase().padEnd(7)}${ctx} ${String(message)}`;
 }
 
+function hasContext(context?: string): context is string {
+  return typeof context === 'string' && context.length > 0;
+}
+
 export class FileLoggerService extends ConsoleLogger {
   constructor() {
     super();
@@ -47,7 +51,11 @@ export class FileLoggerService extends ConsoleLogger {
   }
 
   override log(message: unknown, context?: string): void {
-    super.log(message, context);
+    if (hasContext(context)) {
+      super.log(message, context);
+    } else {
+      super.log(message);
+    }
     this.write('log', message, context);
   }
 
@@ -58,22 +66,38 @@ export class FileLoggerService extends ConsoleLogger {
   }
 
   override warn(message: unknown, context?: string): void {
-    super.warn(message, context);
+    if (hasContext(context)) {
+      super.warn(message, context);
+    } else {
+      super.warn(message);
+    }
     this.write('warn', message, context);
   }
 
   override debug(message: unknown, context?: string): void {
-    super.debug(message, context);
+    if (hasContext(context)) {
+      super.debug(message, context);
+    } else {
+      super.debug(message);
+    }
     this.write('debug', message, context);
   }
 
   override verbose(message: unknown, context?: string): void {
-    super.verbose(message, context);
+    if (hasContext(context)) {
+      super.verbose(message, context);
+    } else {
+      super.verbose(message);
+    }
     this.write('verbose', message, context);
   }
 
   override fatal(message: unknown, context?: string): void {
-    super.fatal(message, context);
+    if (hasContext(context)) {
+      super.fatal(message, context);
+    } else {
+      super.fatal(message);
+    }
     this.write('fatal', message, context);
   }
 

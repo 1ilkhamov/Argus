@@ -1,8 +1,15 @@
 import { API_BASE } from '@/config';
 
+function getAuthHeaders(): HeadersInit {
+  const apiKey = import.meta.env.VITE_API_KEY;
+
+  return apiKey ? { 'X-API-Key': apiKey } : {};
+}
+
 function getDefaultHeaders(): HeadersInit {
   return {
     'Content-Type': 'application/json',
+    ...getAuthHeaders(),
   };
 }
 
@@ -101,7 +108,7 @@ export async function apiStreamFormData(
     const response = await fetch(url, {
       method: 'POST',
       credentials: 'include',
-      // No Content-Type header — browser sets it with boundary for FormData
+      headers: getAuthHeaders(),
       body: formData,
     });
 
