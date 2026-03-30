@@ -4,6 +4,7 @@ const { runDoctor } = require('./commands/doctor');
 const { runStart } = require('./commands/start');
 const { runOnboard } = require('./commands/onboard');
 const { runInit } = require('./commands/init');
+const { runUpdate } = require('./commands/update');
 
 async function runCli(argv = process.argv.slice(2)) {
   const command = argv[0];
@@ -33,6 +34,11 @@ async function runCli(argv = process.argv.slice(2)) {
 
   if (command === 'start') {
     await runStart();
+    return 0;
+  }
+
+  if (command === 'update') {
+    runUpdate();
     return 0;
   }
 

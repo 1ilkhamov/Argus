@@ -29,6 +29,7 @@ function runHelp() {
       { name: 'argus-one onboard', description: 'Prepare env files, dependencies, and local runtime defaults' },
       { name: 'argus-one doctor', description: 'Check readiness, service status, and live endpoints' },
       { name: 'argus-one start', description: 'Launch backend and frontend together from the current Argus workspace' },
+      { name: 'argus-one update', description: 'Pull the latest changes from the remote repository and prompt to re-onboard' },
       { name: 'argus-one --help', description: 'Show the CLI overview and common command flow' },
     ],
     { tone: 'cyan', continueRail: false },
