@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-31
+
+### Fixed
+
+- Stabilized `frontend/src/components/ops/OpsConsoleV2.tsx`: separated Zustand data selectors from action dispatchers so the ops auto-refresh no longer loops on every store update
+- Improved ops page loading UX and layout so current tab content stays visible during refresh while the page keeps the common `Page*` shell structure
+
+### Verified
+
+- `frontend`: `npx eslint src/components/ops/OpsConsoleV2.tsx`
+- `frontend`: `npx tsc --noEmit -p tsconfig.json`
+- `frontend`: `npm run test -- src/stores/ops/ops.store.test.ts`
+
 ## [0.2.0] - 2026-03-31
 
 ### Added
