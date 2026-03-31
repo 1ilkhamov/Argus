@@ -4,7 +4,7 @@ import { mkdirSync, existsSync } from 'fs';
 import { dirname, isAbsolute, resolve } from 'path';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { CronJob, CreateCronJobParams } from './cron-job.types';
+import type { CronJob, CreateCronJobParams, UpdateCronJobParams } from './cron-job.types';
 import { randomUUID } from 'crypto';
 
 interface CronJobRow {
@@ -18,6 +18,7 @@ interface CronJobRow {
   next_run_at: string | null;
   run_count: number;
   max_runs: number;
+  notification_policy: string;
   created_at: string;
   updated_at: string;
 }
@@ -49,17 +50,18 @@ export class CronJobRepository implements OnModuleInit {
       nextRunAt: null,
       runCount: 0,
       maxRuns: params.maxRuns ?? 0,
+      notificationPolicy: params.notificationPolicy ?? 'always',
       createdAt: now,
       updatedAt: now,
     };
 
     db.prepare(
-      `INSERT INTO cron_jobs (id, name, task, schedule_type, schedule, enabled, last_run_at, next_run_at, run_count, max_runs, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO cron_jobs (id, name, task, schedule_type, schedule, enabled, last_run_at, next_run_at, run_count, max_runs, notification_policy, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       job.id, job.name, job.task, job.scheduleType, job.schedule,
       job.enabled ? 1 : 0, job.lastRunAt, job.nextRunAt,
-      job.runCount, job.maxRuns, job.createdAt, job.updatedAt,
+      job.runCount, job.maxRuns, job.notificationPolicy, job.createdAt, job.updatedAt,
     );
 
     this.logger.debug(`Created cron job: ${job.id} "${job.name}"`);
@@ -96,7 +98,7 @@ export class CronJobRepository implements OnModuleInit {
 
   // ─── Update ──────────────────────────────────────────────────────────────
 
-  async update(id: string, updates: Partial<Pick<CronJob, 'enabled' | 'lastRunAt' | 'nextRunAt' | 'runCount' | 'name' | 'task' | 'schedule' | 'scheduleType' | 'maxRuns'>>): Promise<void> {
+  async update(id: string, updates: UpdateCronJobParams & Partial<Pick<CronJob, 'lastRunAt' | 'nextRunAt' | 'runCount'>>): Promise<void> {
     const db = this.getDatabase();
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -110,6 +112,7 @@ export class CronJobRepository implements OnModuleInit {
     if (updates.schedule !== undefined) { sets.push('schedule = ?'); values.push(updates.schedule); }
     if (updates.scheduleType !== undefined) { sets.push('schedule_type = ?'); values.push(updates.scheduleType); }
     if (updates.maxRuns !== undefined) { sets.push('max_runs = ?'); values.push(updates.maxRuns); }
+    if (updates.notificationPolicy !== undefined) { sets.push('notification_policy = ?'); values.push(updates.notificationPolicy); }
 
     if (sets.length === 0) return;
 
@@ -155,10 +158,20 @@ export class CronJobRepository implements OnModuleInit {
         next_run_at TEXT,
         run_count INTEGER NOT NULL DEFAULT 0,
         max_runs INTEGER NOT NULL DEFAULT 0,
+        notification_policy TEXT NOT NULL DEFAULT 'always',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
     `);
+    try {
+      database.exec(`ALTER TABLE cron_jobs ADD COLUMN notification_policy TEXT NOT NULL DEFAULT 'always'`);
+      this.logger.log('Migrated cron_jobs: added notification_policy column');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('duplicate column name')) {
+        throw error;
+      }
+    }
 
     database.exec('CREATE INDEX IF NOT EXISTS idx_cron_enabled ON cron_jobs (enabled)');
     database.exec('CREATE INDEX IF NOT EXISTS idx_cron_next_run ON cron_jobs (next_run_at)');
@@ -185,6 +198,7 @@ export class CronJobRepository implements OnModuleInit {
       nextRunAt: row.next_run_at,
       runCount: row.run_count,
       maxRuns: row.max_runs,
+      notificationPolicy: row.notification_policy as CronJob['notificationPolicy'],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

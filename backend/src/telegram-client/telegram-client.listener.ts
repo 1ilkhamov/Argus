@@ -3,9 +3,11 @@ import { Api } from 'telegram/tl';
 
 import { ChatService } from '../chat/chat.service';
 import { TelegramClientService } from './telegram-client.service';
+import { TelegramClientWriteService } from './telegram-client-write.service';
 import { TelegramClientRepository } from './telegram-client.repository';
 import { TelegramClientMessagesRepository } from './telegram-client-messages.repository';
 import { TelegramClientChatProfilerService } from './telegram-client-chat-profiler.service';
+import { TelegramClientMonitorRuntimeService } from './telegram-client-monitor-runtime.service';
 import type { TgMonitoredChat, TgStoredMessage, TgChatProfile } from './telegram-client.types';
 
 /** Ignore messages older than this on reconnect */
@@ -50,10 +52,12 @@ export class TelegramClientListener implements OnModuleInit {
 
   constructor(
     private readonly clientService: TelegramClientService,
+    private readonly clientWriteService: TelegramClientWriteService,
     private readonly chatService: ChatService,
     private readonly repository: TelegramClientRepository,
     private readonly messagesRepository: TelegramClientMessagesRepository,
     private readonly chatProfiler: TelegramClientChatProfilerService,
+    private readonly monitorRuntime: TelegramClientMonitorRuntimeService,
   ) {}
 
   onModuleInit(): void {
@@ -95,6 +99,18 @@ export class TelegramClientListener implements OnModuleInit {
       ? (this.clientService.getCurrentUser()?.firstName || 'Owner')
       : await this.resolveSenderName(message);
 
+    if (!isOwnMessage) {
+      await this.safeRecordMonitorState(
+        'observeInbound',
+        () => this.monitorRuntime.observeInbound({
+          monitoredChat,
+          messageId: message.id,
+          senderName,
+          observedAt: message.date ? new Date(message.date * 1000).toISOString() : new Date().toISOString(),
+        }),
+      );
+    }
+
     // Persist message to local store (all messages including owner's, for context)
     this.messagesRepository.save({
       chatId,
@@ -117,11 +133,31 @@ export class TelegramClientListener implements OnModuleInit {
     );
 
     // read_only mode: just log, don't reply
-    if (monitoredChat.mode === 'read_only') return;
+    if (monitoredChat.mode === 'read_only') {
+      await this.safeRecordMonitorState(
+        'recordIdle:read_only',
+        () => this.monitorRuntime.recordIdle({
+          monitoredChat,
+          queueLength: this.getQueueLength(chatId),
+          queueActive: false,
+          observedAt: new Date().toISOString(),
+        }),
+      );
+      return;
+    }
 
     // Smart reply decision based on chat type
     if (!(await this.shouldReply(monitoredChat, chatId, text, message))) {
       this.logger.debug(`shouldReply=false for chat ${chatId} (${monitoredChat.chatType}), skipping`);
+      await this.safeRecordMonitorState(
+        'recordIdle:skipped',
+        () => this.monitorRuntime.recordIdle({
+          monitoredChat,
+          queueLength: this.getQueueLength(chatId),
+          queueActive: this.chatQueueActive.get(chatId) ?? false,
+          observedAt: new Date().toISOString(),
+        }),
+      );
       return;
     }
 
@@ -139,6 +175,7 @@ export class TelegramClientListener implements OnModuleInit {
     messageId: number,
   ): Promise<void> {
     try {
+      const processedAt = new Date().toISOString();
       const scopeKey = `${SCOPE_PREFIX}:${chatId}`;
 
       // 1. Get owner name for profile
@@ -167,7 +204,7 @@ export class TelegramClientListener implements OnModuleInit {
       // Each message = fresh conversation; context is in the system instruction from DB
       // Pass source chat info via toolMeta so notify tool can create "Reply" buttons
       // Note: telegram_client write actions are blocked from tg-client scope inside the tool itself
-      const { assistantMessage } = await this.chatService.sendMessage(
+      const { conversation, assistantMessage } = await this.chatService.sendMessage(
         undefined,
         userContent,
         {
@@ -187,9 +224,39 @@ export class TelegramClientListener implements OnModuleInit {
       if (reply) {
         if (monitoredChat.mode === 'manual') {
           this.logger.log(`[MANUAL] Would reply to ${monitoredChat.chatTitle}: ${reply.slice(0, 100)}`);
+          await this.safeRecordMonitorState(
+            'recordManual',
+            () => this.monitorRuntime.recordManual({
+              monitoredChat,
+              queueLength: this.getQueueLength(chatId),
+              queueActive: this.getQueueLength(chatId) > 0,
+              conversationId: conversation.id,
+              observedAt: processedAt,
+            }),
+          );
         } else {
-          const sentId = await this.clientService.sendMessage(chatId, reply, messageId);
+          const sentId = await this.clientWriteService.sendMessage({
+            chatId,
+            chatTitle: monitoredChat.chatTitle,
+            text: reply,
+            replyTo: messageId,
+            actor: 'agent',
+            origin: 'telegram_client_listener',
+            scopeKey,
+            conversationId: conversation.id,
+            correlationId: `${chatId}:${messageId}`,
+          });
           this.lastReplyAt.set(chatId, Date.now());
+          await this.safeRecordMonitorState(
+            'recordReplySent',
+            () => this.monitorRuntime.recordReplySent({
+              monitoredChat,
+              queueLength: this.getQueueLength(chatId),
+              conversationId: conversation.id,
+              replyMessageId: sentId,
+              observedAt: processedAt,
+            }),
+          );
 
           // Persist outgoing reply for context
           const myId = this.clientService.getMyUserId();
@@ -208,10 +275,34 @@ export class TelegramClientListener implements OnModuleInit {
 
           this.logger.debug(`Replied in ${monitoredChat.chatTitle} (${reply.length} chars)`);
         }
+      } else {
+        await this.safeRecordMonitorState(
+          'recordIdle:empty_reply',
+          () => this.monitorRuntime.recordIdle({
+            monitoredChat,
+            queueLength: this.getQueueLength(chatId),
+            queueActive: this.getQueueLength(chatId) > 0,
+            conversationId: conversation.id,
+            observedAt: processedAt,
+          }),
+        );
       }
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.safeRecordMonitorState(
+        'recordError',
+        () => this.monitorRuntime.recordError({
+          monitoredChat,
+          queueLength: this.getQueueLength(chatId),
+          queueActive: this.getQueueLength(chatId) > 0,
+          messageId,
+          senderName,
+          errorMessage: message,
+          observedAt: new Date().toISOString(),
+        }),
+      );
       this.logger.error(
-        `Failed to process message in chat ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to process message in chat ${chatId}: ${message}`,
       );
     }
   }
@@ -454,6 +545,21 @@ export class TelegramClientListener implements OnModuleInit {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  private getQueueLength(chatId: string): number {
+    return this.chatQueues.get(chatId)?.length ?? 0;
+  }
+
+  private async safeRecordMonitorState(
+    label: string,
+    operation: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await operation();
+    } catch (err) {
+      this.logger.warn(`Monitor runtime update failed (${label}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // ─── Per-chat message queue ──────────────────────────────────────────
 
   private enqueue(item: QueuedMessage): void {
@@ -461,6 +567,17 @@ export class TelegramClientListener implements OnModuleInit {
     queue.push(item);
     this.chatQueues.set(item.chatId, queue);
     this.logger.debug(`Enqueued message in ${item.monitoredChat.chatTitle} (queue size: ${queue.length})`);
+    void this.safeRecordMonitorState(
+      'recordQueued',
+      () => this.monitorRuntime.recordQueued({
+        monitoredChat: item.monitoredChat,
+        queueLength: queue.length,
+        queueActive: this.chatQueueActive.get(item.chatId) ?? false,
+        messageId: item.messageId,
+        senderName: item.senderName,
+        observedAt: new Date().toISOString(),
+      }),
+    );
     void this.drainQueue(item.chatId);
   }
 
@@ -481,9 +598,31 @@ export class TelegramClientListener implements OnModuleInit {
         const elapsed = Date.now() - lastReply;
         if (elapsed < cooldownMs) {
           const waitMs = cooldownMs - elapsed;
+          await this.safeRecordMonitorState(
+            'recordCooldown',
+            () => this.monitorRuntime.recordCooldown({
+              monitoredChat: item.monitoredChat,
+              queueLength: this.getQueueLength(chatId),
+              queueActive: true,
+              cooldownUntil: new Date(lastReply + cooldownMs).toISOString(),
+              observedAt: new Date().toISOString(),
+            }),
+          );
           this.logger.debug(`Cooldown wait ${waitMs}ms for chat ${chatId}`);
           await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
         }
+
+        await this.safeRecordMonitorState(
+          'recordProcessing',
+          () => this.monitorRuntime.recordProcessing({
+            monitoredChat: item.monitoredChat,
+            queueLength: this.getQueueLength(chatId),
+            queueActive: true,
+            messageId: item.messageId,
+            senderName: item.senderName,
+            observedAt: new Date().toISOString(),
+          }),
+        );
 
         await this.processAndReply(
           item.chatId, item.monitoredChat, item.text, item.senderName, item.messageId,

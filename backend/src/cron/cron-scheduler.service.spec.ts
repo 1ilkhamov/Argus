@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 
 import { CronJobRepository } from './cron-job.repository';
+import { CronJobRunRepository } from './cron-run.repository';
 import { CronSchedulerService } from './cron-scheduler.service';
 import type { CreateCronJobParams, CronJob } from './cron-job.types';
 
@@ -22,6 +23,7 @@ const buildJob = (params: CreateCronJobParams): CronJob => {
     nextRunAt: null,
     runCount: 0,
     maxRuns: params.maxRuns ?? 0,
+    notificationPolicy: params.notificationPolicy ?? 'always',
     createdAt: now,
     updatedAt: now,
   };
@@ -53,6 +55,12 @@ const createRepository = () => {
   };
 };
 
+const createRunRepository = () => ({
+  create: jest.fn(async () => ({ id: 'run-1' })),
+  update: jest.fn(async () => undefined),
+  findRecent: jest.fn(async () => []),
+});
+
 describe('CronSchedulerService', () => {
   afterEach(() => {
     jest.useRealTimers();
@@ -61,8 +69,10 @@ describe('CronSchedulerService', () => {
 
   it('rejects invalid or unschedulable schedules before persisting a job', async () => {
     const repository = createRepository();
+    const runRepository = createRunRepository();
     const service = new CronSchedulerService(
       repository as unknown as CronJobRepository,
+      runRepository as unknown as CronJobRunRepository,
       createConfigService(),
     );
 
@@ -84,8 +94,10 @@ describe('CronSchedulerService', () => {
     jest.useFakeTimers().setSystemTime(now);
 
     const repository = createRepository();
+    const runRepository = createRunRepository();
     const service = new CronSchedulerService(
       repository as unknown as CronJobRepository,
+      runRepository as unknown as CronJobRunRepository,
       createConfigService(),
     );
 
@@ -107,8 +119,10 @@ describe('CronSchedulerService', () => {
     jest.useFakeTimers().setSystemTime(now);
 
     const repository = createRepository();
+    const runRepository = createRunRepository();
     const service = new CronSchedulerService(
       repository as unknown as CronJobRepository,
+      runRepository as unknown as CronJobRunRepository,
       createConfigService(),
     );
 
@@ -124,5 +138,35 @@ describe('CronSchedulerService', () => {
     const diffMs = Date.parse(job.nextRunAt ?? '') - now.getTime();
     expect(diffMs).toBeGreaterThan(23 * 60 * 60 * 1000);
     expect(diffMs).toBeLessThan(25 * 60 * 60 * 1000);
+  });
+
+  it('records a canceled run when no job handler is registered', async () => {
+    const repository = createRepository();
+    const runRepository = createRunRepository();
+    const service = new CronSchedulerService(
+      repository as unknown as CronJobRepository,
+      runRepository as unknown as CronJobRunRepository,
+      createConfigService(),
+    );
+
+    const job = buildJob({
+      name: 'orphan-job',
+      task: 'test',
+      scheduleType: 'interval',
+      schedule: '60000',
+    });
+
+    await (service as unknown as { fireJob(job: CronJob): Promise<void> }).fireJob(job);
+
+    expect(runRepository.create).toHaveBeenCalledTimes(1);
+    expect(runRepository.update).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'canceled',
+        resultStatus: 'canceled',
+        notificationStatus: 'skipped',
+        errorMessage: 'No job handler registered.',
+      }),
+    );
   });
 });

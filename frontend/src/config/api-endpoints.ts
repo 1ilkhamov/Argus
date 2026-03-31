@@ -38,6 +38,31 @@ export const API_ENDPOINTS = {
     chats: '/telegram-client/chats',
     chat: (id: string) => `/telegram-client/chats/${id}`,
   },
+  ops: {
+    logs: {
+      search: '/logs/search',
+      files: '/logs/files',
+    },
+    monitors: {
+      rules: '/monitors/rules',
+      rule: (id: string) => `/monitors/rules/${id}`,
+      run: (id: string) => `/monitors/rules/${id}/run`,
+      states: '/monitors/states',
+      evaluations: '/monitors/evaluations',
+      alerts: '/monitors/alerts',
+    },
+    cron: {
+      jobs: '/cron/jobs',
+      job: (id: string) => `/cron/jobs/${id}`,
+      pause: (id: string) => `/cron/jobs/${id}/pause`,
+      resume: (id: string) => `/cron/jobs/${id}/resume`,
+      runs: '/cron/runs',
+    },
+    outboundAudit: '/telegram-outbound-audit',
+    telegramClientRuntime: '/telegram-client/runtime',
+    notifyRouting: '/notify-routing',
+    events: '/ops/events',
+  },
   tools: {
     list: '/tools',
   },

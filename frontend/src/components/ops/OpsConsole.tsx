@@ -1,0 +1,153 @@
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, BellRing, Clock3, FileText, Radio, RefreshCw, ShieldCheck } from 'lucide-react';
+import { useShallow } from 'zustand/shallow';
+
+import {
+  LOG_ENTRY_LEVELS,
+  LOG_FILE_KINDS,
+  OUTBOUND_AUDIT_ACTORS,
+  OUTBOUND_AUDIT_RESULTS,
+  type CronJob,
+  type CronJobNotificationPolicy,
+  type LogEntryLevel,
+  type LogFileKind,
+  type OutboundAuditActor,
+  type OutboundAuditResult,
+  type StructuredOperationalEventKind,
+  type TelegramWatchRule,
+} from '@/api/resources/ops.api';
+import { PageEmpty, PageError, PageFooter, PageHeader, PageLoading, PageScrollArea, PageSearchBar, TabBar } from '@/components/common';
+import type { TabItem } from '@/components/common';
+import { useOpsStore } from '@/stores/ops/ops.store';
+import { useLangStore } from '@/stores/ui/lang.store';
+
+type OpsTab = 'logs' | 'monitors' | 'runtime' | 'cron' | 'notify' | 'events' | 'audit';
+type CronForm = { name: string; task: string; scheduleType: 'cron' | 'interval' | 'once'; schedule: string; maxRuns: string; notificationPolicy: CronJobNotificationPolicy };
+type MonitorForm = { monitoredChatId: string; name: string; thresholdSeconds: string };
+const inputStyle = { background: 'var(--panel-muted)', border: '1px solid var(--border-secondary)', color: 'var(--text-primary)' } as const;
+const chipStyle = { background: 'var(--panel-muted)', border: '1px solid var(--border-secondary)' } as const;
+const cronTypes: CronForm['scheduleType'][] = ['cron', 'interval', 'once'];
+const cronPolicies: CronJobNotificationPolicy[] = ['always', 'never'];
+const eventKinds: StructuredOperationalEventKind[] = ['cron_run', 'monitor_evaluation', 'monitor_alert', 'telegram_outbound', 'notify_route'];
+
+function fmt(value: string | number | null | undefined): string { return value === null || value === undefined || value === '' ? '—' : new Date(value).toLocaleString(); }
+function hit(q: string, ...values: Array<string | number | null | undefined>): boolean { return !q || values.some((value) => String(value ?? '').toLowerCase().includes(q)); }
+function text(error: unknown, fallback: string): string { return error instanceof Error ? error.message : fallback; }
+function cronForm(job?: CronJob): CronForm { return { name: job?.name ?? '', task: job?.task ?? '', scheduleType: job?.scheduleType ?? 'cron', schedule: job?.schedule ?? '', maxRuns: String(job?.maxRuns ?? 0), notificationPolicy: job?.notificationPolicy ?? 'always' }; }
+function monitorForm(rule?: TelegramWatchRule): MonitorForm { return { monitoredChatId: rule?.monitoredChatId ?? '', name: rule?.name ?? '', thresholdSeconds: String(rule?.thresholdSeconds ?? 900) }; }
+function nonNegativeInteger(raw: string, label: string): number | undefined { if (!raw.trim()) return undefined; const value = Number(raw); if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer.`); return value; }
+
+function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) { return <section className="space-y-2"><div className="flex items-center justify-between"><h3 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>{title}</h3><span className="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase" style={chipStyle}>{count}</span></div>{children}</section>; }
+function Card({ title, subtitle, rows, body, actions }: { title: string; subtitle?: string; rows?: Array<[string, string]>; body?: string | null; actions?: ReactNode }) { return <div className="rounded-2xl px-4 py-3" style={{ background: 'var(--panel-surface)', border: '1px solid var(--border-secondary)' }}><div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</div>{subtitle && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{subtitle}</div>}{rows && <div className="mt-2 grid gap-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{rows.map(([label, value]) => <div key={`${title}-${label}`} className="flex gap-2"><span className="min-w-[132px]" style={{ color: 'var(--text-tertiary)' }}>{label}</span><span className="break-words">{value}</span></div>)}</div>}{body && <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-[11px]" style={{ background: 'var(--panel-muted)', color: 'var(--text-secondary)' }}>{body}</pre>}{actions && <div className="mt-3 flex flex-wrap gap-2">{actions}</div>}</div>; }
+function Button({ label, onClick, type = 'button' }: { label: string; onClick?: () => void; type?: 'button' | 'submit' }) { return <button type={type} onClick={onClick} className="rounded-xl px-3 py-2 text-[12px] font-medium" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>{label}</button>; }
+
+export function OpsConsole() {
+  const { t } = useLangStore();
+  const [tab, setTab] = useState<OpsTab>('logs');
+  const [logQuery, setLogQuery] = useState('');
+  const [logLevel, setLogLevel] = useState<'' | LogEntryLevel>('');
+  const [logContext, setLogContext] = useState('');
+  const [logEvent, setLogEvent] = useState('');
+  const [logFileKind, setLogFileKind] = useState<'' | LogFileKind>('');
+  const [logDate, setLogDate] = useState('');
+  const [monitorQuery, setMonitorQuery] = useState('');
+  const [runtimeQuery, setRuntimeQuery] = useState('');
+  const [cronQuery, setCronQuery] = useState('');
+  const [notifyQuery, setNotifyQuery] = useState('');
+  const [eventsQuery, setEventsQuery] = useState('');
+  const [eventKind, setEventKind] = useState<'' | StructuredOperationalEventKind>('');
+  const [eventChatId, setEventChatId] = useState('');
+  const [eventCorrelationId, setEventCorrelationId] = useState('');
+  const [auditChatId, setAuditChatId] = useState('');
+  const [auditActor, setAuditActor] = useState<'' | OutboundAuditActor>('');
+  const [auditResult, setAuditResult] = useState<'' | OutboundAuditResult>('');
+  const [cronDraft, setCronDraft] = useState<CronForm>(() => cronForm());
+  const [editingCronId, setEditingCronId] = useState<string | null>(null);
+  const [monitorDraft, setMonitorDraft] = useState<MonitorForm>(() => monitorForm());
+  const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const store = useOpsStore(useShallow((state) => ({
+    logs: state.logs, logFilesScanned: state.logFilesScanned, monitoredChats: state.monitoredChats, monitorRules: state.monitorRules, monitorStates: state.monitorStates, monitorEvaluations: state.monitorEvaluations, monitorAlerts: state.monitorAlerts, runtimeStates: state.runtimeStates, cronJobs: state.cronJobs, cronRuns: state.cronRuns, outboundAuditEvents: state.outboundAuditEvents, notifyRouting: state.notifyRouting, operationalEvents: state.operationalEvents, isLoading: state.isLoading, error: state.error, lastUpdatedAt: state.lastUpdatedAt, loadLogs: state.loadLogs, loadMonitorSnapshot: state.loadMonitorSnapshot, loadRuntimeStates: state.loadRuntimeStates, loadCronSnapshot: state.loadCronSnapshot, loadOutboundAudit: state.loadOutboundAudit, loadNotifyRouting: state.loadNotifyRouting, loadOperationalEvents: state.loadOperationalEvents, createCronJob: state.createCronJob, updateCronJob: state.updateCronJob, deleteCronJob: state.deleteCronJob, pauseCronJob: state.pauseCronJob, resumeCronJob: state.resumeCronJob, createMonitorRule: state.createMonitorRule, updateMonitorRule: state.updateMonitorRule, deleteMonitorRule: state.deleteMonitorRule, runMonitorRule: state.runMonitorRule, clearError: state.clearError,
+  })));
+
+  const { clearError, loadCronSnapshot, loadLogs, loadMonitorSnapshot, loadNotifyRouting, loadOperationalEvents, loadOutboundAudit, loadRuntimeStates } = store;
+
+  const clearErrors = useCallback(() => { clearError(); setLocalError(null); }, [clearError]);
+  const refresh = useCallback(async () => {
+    clearErrors();
+    if (tab === 'logs') return loadLogs({ query: logQuery.trim() || undefined, level: logLevel || undefined, context: logContext.trim() || undefined, event: logEvent.trim() || undefined, fileKind: logFileKind || undefined, date: logDate || undefined, limit: 50 });
+    if (tab === 'monitors') return loadMonitorSnapshot();
+    if (tab === 'runtime') return loadRuntimeStates();
+    if (tab === 'cron') return loadCronSnapshot();
+    if (tab === 'notify') return loadNotifyRouting(50);
+    if (tab === 'events') return loadOperationalEvents({ kind: eventKind || undefined, correlationId: eventCorrelationId.trim() || undefined, chatId: eventChatId.trim() || undefined, limit: 50 });
+    return loadOutboundAudit({ actor: auditActor || undefined, result: auditResult || undefined, chatId: auditChatId.trim() || undefined, limit: 50 });
+  }, [auditActor, auditChatId, auditResult, clearErrors, eventChatId, eventCorrelationId, eventKind, loadCronSnapshot, loadLogs, loadMonitorSnapshot, loadNotifyRouting, loadOperationalEvents, loadOutboundAudit, loadRuntimeStates, logContext, logDate, logEvent, logFileKind, logLevel, logQuery, tab]);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const mq = monitorQuery.trim().toLowerCase();
+  const rq = runtimeQuery.trim().toLowerCase();
+  const cq = cronQuery.trim().toLowerCase();
+  const nq = notifyQuery.trim().toLowerCase();
+  const eq = eventsQuery.trim().toLowerCase();
+  const monitorRules = useMemo(() => store.monitorRules.filter((item) => hit(mq, item.id, item.name, item.monitoredChatId)), [mq, store.monitorRules]);
+  const monitorStates = useMemo(() => store.monitorStates.filter((item) => hit(mq, item.ruleId, item.chatId, item.chatTitle, item.status, item.lastEvaluationMessage)), [mq, store.monitorStates]);
+  const monitorEvaluations = useMemo(() => store.monitorEvaluations.filter((item) => hit(mq, item.id, item.ruleId, item.chatId, item.chatTitle, item.message, item.correlationId)), [mq, store.monitorEvaluations]);
+  const monitorAlerts = useMemo(() => store.monitorAlerts.filter((item) => hit(mq, item.ruleId, item.chatId, item.chatTitle, item.message, item.correlationId)), [mq, store.monitorAlerts]);
+  const monitoredChats = useMemo(() => store.monitoredChats.filter((item) => hit(rq, item.id, item.chatId, item.chatTitle, item.mode, item.chatType, item.systemNote)), [rq, store.monitoredChats]);
+  const runtimeStates = useMemo(() => store.runtimeStates.filter((item) => hit(rq, item.chatId, item.chatTitle, item.mode, item.status, item.lastErrorMessage)), [rq, store.runtimeStates]);
+  const cronJobs = useMemo(() => store.cronJobs.filter((item) => hit(cq, item.id, item.name, item.task, item.schedule, item.notificationPolicy)), [cq, store.cronJobs]);
+  const cronRuns = useMemo(() => store.cronRuns.filter((item) => hit(cq, item.id, item.jobId, item.jobName, item.status, item.resultStatus, item.notificationStatus, item.errorMessage, item.notificationErrorMessage)), [cq, store.cronRuns]);
+  const pendingMessages = useMemo(() => store.notifyRouting.pendingMessages.filter((item) => hit(nq, item.botMessageId, item.chatId, item.chatTitle, item.question)), [nq, store.notifyRouting.pendingMessages]);
+  const awaitingReplies = useMemo(() => store.notifyRouting.awaitingReplies.filter((item) => hit(nq, item.botChatId, item.sourceBotMessageId, item.chatId, item.chatTitle, item.question)), [nq, store.notifyRouting.awaitingReplies]);
+  const notifyRoutes = useMemo(() => store.notifyRouting.recentRoutes.filter((item) => hit(nq, item.id, item.chatId, item.chatTitle, item.replyText, item.routeStatus, item.correlationId)), [nq, store.notifyRouting.recentRoutes]);
+  const operationalEvents = useMemo(() => store.operationalEvents.filter((item) => hit(eq, item.id, item.kind, item.status, item.source, item.title, item.summary, item.correlationId, item.chatId, item.chatTitle, item.jobId, item.jobName, item.ruleId)), [eq, store.operationalEvents]);
+  const tabs: TabItem<OpsTab>[] = [{ key: 'logs', label: t('ops.tabLogs'), icon: FileText, count: store.logs.length }, { key: 'monitors', label: t('ops.tabMonitors'), icon: BellRing, count: store.monitorRules.length }, { key: 'runtime', label: t('ops.tabRuntime'), icon: Radio, count: store.runtimeStates.length }, { key: 'cron', label: t('ops.tabCron'), icon: Clock3, count: store.cronJobs.length }, { key: 'notify', label: t('ops.tabNotify'), icon: BellRing, count: store.notifyRouting.pendingMessages.length + store.notifyRouting.awaitingReplies.length + store.notifyRouting.recentRoutes.length }, { key: 'events', label: t('ops.tabEvents'), icon: Activity, count: store.operationalEvents.length }, { key: 'audit', label: t('ops.tabAudit'), icon: ShieldCheck, count: store.outboundAuditEvents.length }];
+
+  const startCronEdit = (job: CronJob) => { setEditingCronId(job.id); setCronDraft(cronForm(job)); setLocalError(null); };
+  const startMonitorEdit = (rule: TelegramWatchRule) => { setEditingMonitorId(rule.id); setMonitorDraft(monitorForm(rule)); setLocalError(null); };
+  const cancelCronEdit = () => { setEditingCronId(null); setCronDraft(cronForm()); };
+  const cancelMonitorEdit = () => { setEditingMonitorId(null); setMonitorDraft(monitorForm()); };
+
+  const submitCron = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); clearErrors();
+    try {
+      const payload = { name: cronDraft.name.trim(), task: cronDraft.task.trim(), scheduleType: cronDraft.scheduleType, schedule: cronDraft.schedule.trim(), maxRuns: nonNegativeInteger(cronDraft.maxRuns, t('ops.maxRuns')) ?? 0, notificationPolicy: cronDraft.notificationPolicy };
+      if (!payload.name || !payload.task || !payload.schedule) throw new Error(t('ops.validationRequired'));
+      if (editingCronId) await store.updateCronJob(editingCronId, payload); else await store.createCronJob(payload);
+      cancelCronEdit();
+    } catch (error) { setLocalError(text(error, t('common.error'))); }
+  };
+
+  const submitMonitor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); clearErrors();
+    try {
+      const payload = { monitoredChatId: monitorDraft.monitoredChatId.trim(), name: monitorDraft.name.trim() || undefined, thresholdSeconds: nonNegativeInteger(monitorDraft.thresholdSeconds, t('ops.thresholdSeconds')) };
+      if (!payload.monitoredChatId) throw new Error(t('ops.validationRequired'));
+      if (editingMonitorId) await store.updateMonitorRule(editingMonitorId, payload); else await store.createMonitorRule(payload);
+      cancelMonitorEdit();
+    } catch (error) { setLocalError(text(error, t('common.error'))); }
+  };
+
+  const renderTabFilters = () => {
+    if (tab === 'logs') return <div className="space-y-3"><PageSearchBar value={logQuery} onChange={setLogQuery} placeholder={t('ops.searchLogs')} /><div className="grid grid-cols-1 gap-2 px-6 pb-1 md:grid-cols-5"><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as '' | LogEntryLevel)} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}><option value="">{t('ops.all')}</option>{LOG_ENTRY_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}</select><select value={logFileKind} onChange={(event) => setLogFileKind(event.target.value as '' | LogFileKind)} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}><option value="">{t('ops.all')}</option>{LOG_FILE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}</select><input value={logContext} onChange={(event) => setLogContext(event.target.value)} placeholder={t('ops.context')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><input value={logEvent} onChange={(event) => setLogEvent(event.target.value)} placeholder={t('ops.event')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><input type="date" value={logDate} onChange={(event) => setLogDate(event.target.value)} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /></div></div>;
+    if (tab === 'monitors') return <PageSearchBar value={monitorQuery} onChange={setMonitorQuery} placeholder={t('ops.monitorSearch')} />;
+    if (tab === 'runtime') return <PageSearchBar value={runtimeQuery} onChange={setRuntimeQuery} placeholder={t('ops.runtimeSearch')} />;
+    if (tab === 'cron') return <PageSearchBar value={cronQuery} onChange={setCronQuery} placeholder={t('ops.cronSearch')} />;
+    if (tab === 'notify') return <PageSearchBar value={notifyQuery} onChange={setNotifyQuery} placeholder={t('ops.notifySearch')} />;
+    if (tab === 'events') return <div className="space-y-3"><PageSearchBar value={eventsQuery} onChange={setEventsQuery} placeholder={t('ops.eventsSearch')} /><div className="grid grid-cols-1 gap-2 px-6 pb-1 md:grid-cols-3"><select value={eventKind} onChange={(event) => setEventKind(event.target.value as '' | StructuredOperationalEventKind)} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}><option value="">{t('ops.all')}</option>{eventKinds.map((kind) => <option key={kind} value={kind}>{kind}</option>)}</select><input value={eventChatId} onChange={(event) => setEventChatId(event.target.value)} placeholder={t('ops.chat')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><input value={eventCorrelationId} onChange={(event) => setEventCorrelationId(event.target.value)} placeholder={t('ops.correlationId')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /></div></div>;
+    return <div className="space-y-3"><PageSearchBar value={auditChatId} onChange={setAuditChatId} placeholder={t('ops.auditSearch')} /><div className="grid grid-cols-1 gap-2 px-6 pb-1 md:grid-cols-2"><select value={auditActor} onChange={(event) => setAuditActor(event.target.value as '' | OutboundAuditActor)} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}><option value="">{t('ops.all')}</option>{OUTBOUND_AUDIT_ACTORS.map((actor) => <option key={actor} value={actor}>{actor}</option>)}</select><select value={auditResult} onChange={(event) => setAuditResult(event.target.value as '' | OutboundAuditResult)} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}><option value="">{t('ops.all')}</option>{OUTBOUND_AUDIT_RESULTS.map((result) => <option key={result} value={result}>{result}</option>)}</select></div></div>;
+  };
+
+  const renderContent = () => {
+    if (tab === 'logs') return store.logs.length === 0 ? <PageEmpty label={t('ops.noLogs')} /> : <div className="space-y-3">{store.logs.map((entry, index) => <Card key={`${entry.file}-${entry.timestamp}-${index}`} title={`${entry.file} · ${fmt(entry.timestamp)}`} subtitle={entry.context ?? undefined} rows={[[t('ops.level'), entry.level], [t('ops.event'), entry.event ?? '—']]} body={entry.message} />)}</div>;
+    if (tab === 'monitors') return <div className="space-y-4"><form onSubmit={(event) => void submitMonitor(event)} className="grid gap-3 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border-secondary)', background: 'var(--panel-surface)' }}><div className="flex items-center justify-between gap-3"><div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{editingMonitorId ? t('ops.updateMonitorRule') : t('ops.createMonitorRule')}</div>{editingMonitorId && <Button label={t('ops.cancelEdit')} onClick={cancelMonitorEdit} />}</div><div className="grid grid-cols-1 gap-3 md:grid-cols-3"><input value={monitorDraft.monitoredChatId} onChange={(event) => setMonitorDraft((current) => ({ ...current, monitoredChatId: event.target.value }))} placeholder={t('ops.monitoredChatId')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><input value={monitorDraft.name} onChange={(event) => setMonitorDraft((current) => ({ ...current, name: event.target.value }))} placeholder={t('ops.name')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><input value={monitorDraft.thresholdSeconds} onChange={(event) => setMonitorDraft((current) => ({ ...current, thresholdSeconds: event.target.value }))} placeholder={t('ops.thresholdSeconds')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /></div><div className="flex justify-end"><Button type="submit" label={editingMonitorId ? t('ops.updateMonitorRule') : t('ops.createMonitorRule')} /></div></form><Section title={t('ops.sectionRules')} count={monitorRules.length}>{monitorRules.length === 0 ? <PageEmpty label={t('ops.noMonitorData')} /> : monitorRules.map((rule) => <Card key={rule.id} title={rule.name} subtitle={rule.id} rows={[[t('ops.monitoredChatId'), rule.monitoredChatId], [t('ops.thresholdSeconds'), String(rule.thresholdSeconds)], [t('ops.status'), rule.enabled ? t('ops.active') : t('ops.paused')]]} actions={<><Button label={t('ops.editAction')} onClick={() => startMonitorEdit(rule)} /><Button label={rule.enabled ? t('ops.pauseAction') : t('ops.resumeAction')} onClick={() => void store.updateMonitorRule(rule.id, { enabled: !rule.enabled })} /><Button label={t('ops.runAction')} onClick={() => void store.runMonitorRule(rule.id)} /><Button label={t('ops.deleteAction')} onClick={() => { if (window.confirm(`${t('ops.deleteConfirm')} ${rule.name}?`)) void store.deleteMonitorRule(rule.id); }} /></>} />)}</Section><Section title={t('ops.sectionStates')} count={monitorStates.length}>{monitorStates.map((item) => <Card key={item.ruleId} title={item.chatTitle ?? item.chatId ?? item.monitoredChatId} subtitle={item.ruleId} rows={[[t('ops.status'), item.status], [t('ops.lastInbound'), fmt(item.lastInboundAt)], [t('ops.lastReply'), fmt(item.lastOwnerReplyAt)], [t('ops.lastEvaluation'), fmt(item.lastEvaluatedAt)]]} body={item.lastEvaluationMessage} />)}</Section><Section title={t('ops.sectionEvaluations')} count={monitorEvaluations.length}>{monitorEvaluations.map((item) => <Card key={item.id} title={item.chatTitle ?? item.chatId ?? item.ruleId} subtitle={item.ruleId} rows={[[t('ops.status'), item.evaluationStatus], [t('ops.correlationId'), item.correlationId ?? '—'], [t('ops.chat'), item.chatId ?? '—']]} body={item.message} />)}</Section><Section title={t('ops.sectionAlerts')} count={monitorAlerts.length}>{monitorAlerts.map((item) => <Card key={`${item.evaluationId}-${item.ruleId}`} title={item.chatTitle ?? item.chatId ?? item.ruleId} subtitle={item.ruleId} rows={[[t('ops.correlationId'), item.correlationId ?? '—'], [t('ops.chat'), item.chatId ?? '—'], [t('ops.updated'), fmt(item.evaluatedAt)]]} body={item.message} />)}</Section></div>;
+    if (tab === 'runtime') return <div className="space-y-4"><Section title={t('ops.sectionMonitoredChats')} count={monitoredChats.length}>{monitoredChats.length === 0 ? <PageEmpty label={t('ops.noRuntime')} /> : monitoredChats.map((item) => <Card key={item.id} title={item.chatTitle} subtitle={item.chatId} rows={[[t('ops.chatType'), item.chatType], [t('ops.mode'), item.mode], [t('ops.cooldown'), `${item.cooldownSeconds}s`], [t('ops.updated'), fmt(item.updatedAt)]]} body={item.systemNote} />)}</Section><Section title={t('ops.sectionRuntimeStates')} count={runtimeStates.length}>{runtimeStates.map((item) => <Card key={item.monitoredChatId} title={item.chatTitle} subtitle={item.chatId} rows={[[t('ops.status'), item.status], [t('ops.queue'), `${item.queueLength}/${item.queueActive ? 'active' : 'idle'}`], [t('ops.lastInbound'), fmt(item.lastInboundAt)], [t('ops.lastReply'), fmt(item.lastReplyAt)], [t('ops.cooldown'), fmt(item.cooldownUntil)]]} body={item.lastErrorMessage} />)}</Section></div>;
+    if (tab === 'cron') return <div className="space-y-4"><form onSubmit={(event) => void submitCron(event)} className="grid gap-3 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border-secondary)', background: 'var(--panel-surface)' }}><div className="flex items-center justify-between gap-3"><div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{editingCronId ? t('ops.updateCronJob') : t('ops.createCronJob')}</div>{editingCronId && <Button label={t('ops.cancelEdit')} onClick={cancelCronEdit} />}</div><div className="grid grid-cols-1 gap-3 md:grid-cols-2"><input value={cronDraft.name} onChange={(event) => setCronDraft((current) => ({ ...current, name: event.target.value }))} placeholder={t('ops.name')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><select value={cronDraft.scheduleType} onChange={(event) => setCronDraft((current) => ({ ...current, scheduleType: event.target.value as CronForm['scheduleType'] }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>{cronTypes.map((value) => <option key={value} value={value}>{value}</option>)}</select><input value={cronDraft.schedule} onChange={(event) => setCronDraft((current) => ({ ...current, schedule: event.target.value }))} placeholder={t('ops.schedule')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><input value={cronDraft.maxRuns} onChange={(event) => setCronDraft((current) => ({ ...current, maxRuns: event.target.value }))} placeholder={t('ops.maxRuns')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /><select value={cronDraft.notificationPolicy} onChange={(event) => setCronDraft((current) => ({ ...current, notificationPolicy: event.target.value as CronJobNotificationPolicy }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>{cronPolicies.map((value) => <option key={value} value={value}>{value}</option>)}</select><textarea value={cronDraft.task} onChange={(event) => setCronDraft((current) => ({ ...current, task: event.target.value }))} rows={4} placeholder={t('ops.task')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} /></div><div className="flex justify-end"><Button type="submit" label={editingCronId ? t('ops.updateCronJob') : t('ops.createCronJob')} /></div></form><Section title={t('ops.sectionJobs')} count={cronJobs.length}>{cronJobs.length === 0 ? <PageEmpty label={t('ops.noCronData')} /> : cronJobs.map((job) => <Card key={job.id} title={job.name} subtitle={job.id} rows={[[t('ops.schedule'), `${job.scheduleType} · ${job.schedule}`], [t('ops.status'), job.enabled ? t('ops.active') : t('ops.paused')], [t('ops.notificationPolicy'), job.notificationPolicy], [t('ops.nextRun'), fmt(job.nextRunAt)], [t('ops.lastRun'), fmt(job.lastRunAt)]]} body={job.task} actions={<><Button label={t('ops.editAction')} onClick={() => startCronEdit(job)} /><Button label={job.enabled ? t('ops.pauseAction') : t('ops.resumeAction')} onClick={() => void (job.enabled ? store.pauseCronJob(job.id) : store.resumeCronJob(job.id))} /><Button label={t('ops.deleteAction')} onClick={() => { if (window.confirm(`${t('ops.deleteConfirm')} ${job.name}?`)) void store.deleteCronJob(job.id); }} /></>} />)}</Section><Section title={t('ops.sectionRuns')} count={cronRuns.length}>{cronRuns.map((run) => <Card key={run.id} title={run.jobName} subtitle={run.id} rows={[[t('ops.status'), run.status], [t('ops.result'), run.resultStatus], [t('ops.notificationStatus'), run.notificationStatus], [t('ops.attempt'), String(run.attempt)], [t('ops.lastRun'), fmt(run.startedAt)], [t('ops.toolsUsed'), run.toolNames.join(', ') || '—']]} body={run.errorMessage ?? run.notificationErrorMessage ?? run.outputPreview} />)}</Section></div>;
+    if (tab === 'notify') return <div className="space-y-4"><Section title={t('ops.sectionPendingMessages')} count={pendingMessages.length}>{pendingMessages.length === 0 ? <PageEmpty label={t('ops.noNotifyRouting')} /> : pendingMessages.map((item) => <Card key={`${item.chatId}-${item.botMessageId}`} title={item.chatTitle} subtitle={item.chatId} rows={[[t('ops.botMessageId'), String(item.botMessageId)], [t('ops.createdAt'), fmt(item.createdAt)], [t('ops.expiresAt'), fmt(item.expiresAt)]]} body={item.question} />)}</Section><Section title={t('ops.sectionAwaitingReplies')} count={awaitingReplies.length}>{awaitingReplies.map((item) => <Card key={`${item.botChatId}-${item.chatId}`} title={item.chatTitle} subtitle={item.chatId} rows={[[t('ops.botChatId'), String(item.botChatId)], [t('ops.sourceBotMessageId'), String(item.sourceBotMessageId ?? '—')], [t('ops.expiresAt'), fmt(item.expiresAt)]]} body={item.question} />)}</Section><Section title={t('ops.sectionNotifyRoutes')} count={notifyRoutes.length}>{notifyRoutes.map((item) => <Card key={item.id} title={item.chatTitle} subtitle={item.id} rows={[[t('ops.status'), item.routeStatus], [t('ops.correlationId'), item.correlationId ?? '—'], [t('ops.createdAt'), fmt(item.createdAt)], [t('ops.completedAt'), fmt(item.completedAt)]]} body={`${item.question}${item.replyText ? `\n\n${item.replyText}` : ''}`} />)}</Section></div>;
+    if (tab === 'events') return operationalEvents.length === 0 ? <PageEmpty label={t('ops.noEvents')} /> : <div className="space-y-3">{operationalEvents.map((item) => <Card key={item.id} title={item.title} subtitle={`${item.kind} · ${fmt(item.timestamp)}`} rows={[[t('ops.status'), item.status], [t('ops.source'), item.source], [t('ops.chat'), item.chatTitle ?? item.chatId ?? '—'], [t('ops.jobId'), item.jobName ?? item.jobId ?? '—'], [t('ops.ruleId'), item.ruleId ?? '—'], [t('ops.correlationId'), item.correlationId ?? '—']]} body={item.summary} />)}</div>;
+    return store.outboundAuditEvents.length === 0 ? <PageEmpty label={t('ops.noAudit')} /> : <div className="space-y-3">{store.outboundAuditEvents.map((item) => <Card key={item.id} title={item.targetChatTitle ?? item.targetChatId ?? '—'} subtitle={`${item.channel} · ${fmt(item.createdAt)}`} rows={[[t('ops.actor'), item.actor], [t('ops.origin'), item.origin], [t('ops.policy'), item.policyDecision], [t('ops.result'), item.result], [t('ops.correlationId'), item.correlationId ?? '—']]} body={item.errorMessage ?? item.payloadPreview} />)}</div>;
+  };
+
+  return <div className="flex h-full flex-col"><PageHeader icon={Activity} title={t('ops.title')} subtitle={t('ops.subtitle')} actions={<button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium" style={{ background: 'var(--panel-muted)', color: 'var(--text-primary)' }}><RefreshCw className="h-4 w-4" />{t('ops.refresh')}</button>} /><TabBar tabs={tabs} activeTab={tab} onChange={setTab} /><div className="border-b pb-3" style={{ borderColor: 'var(--border-secondary)' }}>{renderTabFilters()}</div>{(store.error || localError) && <PageError message={localError ?? store.error ?? ''} onDismiss={clearErrors} dismissLabel={t('common.dismiss')} />}{store.isLoading ? <PageLoading label={t('common.loading')} /> : <PageScrollArea><div className="space-y-4 px-6 py-4">{renderContent()}</div></PageScrollArea>}<PageFooter>{store.lastUpdatedAt ? `${t('ops.updated')}: ${fmt(store.lastUpdatedAt)}` : ''}</PageFooter></div>;
+}

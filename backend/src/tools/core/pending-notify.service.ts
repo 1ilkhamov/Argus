@@ -1,28 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { PendingNotifyRepository } from './pending-notify.repository';
+import { PENDING_TTL_MS, type PendingNotify, type PendingNotifySnapshot } from './pending-notify.types';
+
+export type { PendingNotify, PendingNotifySnapshot } from './pending-notify.types';
+
 /**
  * Tracks pending notify requests from tg-client conversations.
  * When the agent calls `notify` from a tg-client scope, we store the source chat info.
  * The bot can then route the owner's reply back to the correct chat.
  */
 
-export interface PendingNotify {
-  /** Source tg-client chat ID (e.g. "-1002083278583") */
-  chatId: string;
-  /** Human-readable chat title */
-  chatTitle: string;
-  /** Original question/request text */
-  question: string;
-  /** Timestamp when the notify was created */
-  createdAt: number;
-}
-
-/** TTL for pending notifies (10 minutes) */
-const PENDING_TTL_MS = 10 * 60 * 1000;
-
 @Injectable()
 export class PendingNotifyService {
   private readonly logger = new Logger(PendingNotifyService.name);
+
+  constructor(
+    private readonly repository: PendingNotifyRepository,
+  ) {}
 
   /**
    * Bot message ID → pending notify info.
@@ -40,28 +35,68 @@ export class PendingNotifyService {
   /** Store a pending notify keyed by the bot message ID */
   setPending(botMessageId: number, info: PendingNotify): void {
     this.pending.set(botMessageId, info);
+    this.repository.setPending(botMessageId, info);
     this.logger.debug(`Pending notify stored: msg=${botMessageId} → chat="${info.chatTitle}" (${info.chatId})`);
     this.cleanup();
   }
 
   /** Get pending notify by bot message ID */
   getPending(botMessageId: number): PendingNotify | undefined {
-    return this.pending.get(botMessageId);
+    this.cleanup();
+    const cached = this.pending.get(botMessageId);
+    if (cached) {
+      return cached;
+    }
+
+    const stored = this.repository.getPending(botMessageId);
+    if (stored) {
+      this.pending.set(botMessageId, stored);
+    }
+    return stored;
   }
 
   /** Mark that the owner is about to reply — next text message should be routed */
   setAwaitingReply(botChatId: number, info: PendingNotify): void {
     this.awaitingReply.set(botChatId, info);
+    this.repository.setAwaitingReply(botChatId, info);
     this.logger.debug(`Awaiting reply from bot chat ${botChatId} → "${info.chatTitle}"`);
+    this.cleanup();
+  }
+
+  getAwaitingReply(botChatId: number): PendingNotify | undefined {
+    this.cleanup();
+    const cached = this.awaitingReply.get(botChatId);
+    if (cached) {
+      return cached;
+    }
+
+    const stored = this.repository.getAwaitingReply(botChatId);
+    if (stored) {
+      this.awaitingReply.set(botChatId, stored);
+    }
+    return stored;
   }
 
   /** Check and consume awaiting reply for a bot chat */
   consumeAwaitingReply(botChatId: number): PendingNotify | undefined {
-    const info = this.awaitingReply.get(botChatId);
-    if (info) {
-      this.awaitingReply.delete(botChatId);
-    }
-    return info;
+    this.cleanup();
+    this.awaitingReply.delete(botChatId);
+    return this.repository.consumeAwaitingReply(botChatId);
+  }
+
+  completeAwaitingReply(botChatId: number, replyText: string, correlationId: string | null): void {
+    this.cleanup();
+    this.awaitingReply.delete(botChatId);
+    this.repository.completeAwaitingReply(botChatId, { replyText, correlationId });
+  }
+
+  getSnapshot(limit: number = 50): PendingNotifySnapshot {
+    this.cleanup();
+    return {
+      pendingMessages: this.repository.listPending(limit),
+      awaitingReplies: this.repository.listAwaitingReplies(limit),
+      recentRoutes: this.repository.listRecentRoutes(limit),
+    };
   }
 
   /** Remove expired entries */
@@ -70,6 +105,12 @@ export class PendingNotifyService {
     for (const [id, info] of this.pending) {
       if (now - info.createdAt > PENDING_TTL_MS) {
         this.pending.delete(id);
+      }
+    }
+
+    for (const [id, info] of this.awaitingReply) {
+      if (now - info.createdAt > PENDING_TTL_MS) {
+        this.awaitingReply.delete(id);
       }
     }
   }

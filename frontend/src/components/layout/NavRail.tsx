@@ -1,10 +1,11 @@
-import { MessageSquare, Wrench, Brain, Settings } from 'lucide-react';
+import { Activity, MessageSquare, Wrench, Brain, Settings } from 'lucide-react';
 
 import { useDashboardStore, type AppPage } from '@/stores/ui/dashboard.store';
 import { useLangStore, type TranslationKey } from '@/stores/ui/lang.store';
 
 const NAV_ITEMS: { key: AppPage; icon: typeof Settings; label: TranslationKey }[] = [
   { key: 'chat', icon: MessageSquare, label: 'chat.newChat' },
+  { key: 'ops', icon: Activity, label: 'ops.title' },
   { key: 'tools', icon: Wrench, label: 'tools.title' },
   { key: 'memory', icon: Brain, label: 'memory.title' },
   { key: 'settings', icon: Settings, label: 'settings.title' },

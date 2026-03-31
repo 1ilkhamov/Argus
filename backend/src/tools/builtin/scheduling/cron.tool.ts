@@ -2,8 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { ToolRegistryService } from '../../core/registry/tool-registry.service';
 import type { Tool, ToolDefinition } from '../../core/tool.types';
-import { CronSchedulerService } from '../../../cron/cron-scheduler.service';
-import type { CronScheduleType } from '../../../cron/cron-job.types';
+import { CronManagementToolService } from './cron-management-tool.service';
 
 @Injectable()
 export class CronTool implements Tool, OnModuleInit {
@@ -18,33 +17,42 @@ export class CronTool implements Tool, OnModuleInit {
       properties: {
         action: {
           type: 'string',
-          description: 'Action: "create", "list", "delete", "pause", or "resume".',
-          enum: ['create', 'list', 'delete', 'pause', 'resume'],
+          description: 'Action: "create", "update", "list", "list_runs", "delete", "pause", or "resume".',
+          enum: ['create', 'update', 'list', 'list_runs', 'delete', 'pause', 'resume'],
         },
         name: {
           type: 'string',
-          description: 'Human-readable job name (for "create"). E.g. "Morning news summary".',
+          description: 'Human-readable job name (for "create" or "update"). E.g. "Morning news summary".',
         },
         task: {
           type: 'string',
-          description: 'What the agent should do when the job fires (for "create"). Write it as if you are giving yourself an instruction. E.g. "Search for top tech news and send a summary notification to the user".',
+          description: 'What the agent should do when the job fires (for "create" or "update"). Write it as if you are giving yourself an instruction. E.g. "Search for top tech news and send a summary notification to the user".',
         },
         schedule_type: {
           type: 'string',
-          description: 'Schedule type (for "create"): "cron", "interval", or "once".',
+          description: 'Schedule type (for "create" or "update"): "cron", "interval", or "once".',
           enum: ['cron', 'interval', 'once'],
         },
         schedule: {
           type: 'string',
-          description: 'Schedule expression (for "create"). See description for format.',
+          description: 'Schedule expression (for "create" or "update"). See description for format.',
         },
         max_runs: {
           type: 'number',
-          description: 'Max executions (for "create"). 0 = unlimited. Default: 0.',
+          description: 'Max executions (for "create" or "update"). 0 = unlimited. Default: 0.',
+        },
+        notification_policy: {
+          type: 'string',
+          description: 'Notification policy (for "create" or "update"): "always" or "never". "never" keeps successful runs silent while still recording run history.',
+          enum: ['always', 'never'],
         },
         id: {
           type: 'string',
-          description: 'Job ID (for "delete", "pause", "resume").',
+          description: 'Job ID (for "update", "delete", "pause", "resume", or filtering "list_runs").',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of recent runs to return for "list_runs". Default: 10, max: 20.',
         },
       },
       required: ['action'],
@@ -54,7 +62,7 @@ export class CronTool implements Tool, OnModuleInit {
 
   constructor(
     private readonly registry: ToolRegistryService,
-    private readonly scheduler: CronSchedulerService,
+    private readonly management: CronManagementToolService,
   ) {}
 
   onModuleInit(): void {
@@ -69,8 +77,12 @@ export class CronTool implements Tool, OnModuleInit {
       switch (action) {
         case 'create':
           return this.handleCreate(args);
+        case 'update':
+          return this.handleUpdate(args);
         case 'list':
           return this.handleList();
+        case 'list_runs':
+          return this.handleListRuns(args);
         case 'delete':
           return this.handleDelete(args);
         case 'pause':
@@ -78,7 +90,7 @@ export class CronTool implements Tool, OnModuleInit {
         case 'resume':
           return this.handleResume(args);
         default:
-          return `Unknown action: "${action}". Use "create", "list", "delete", "pause", or "resume".`;
+          return `Unknown action: "${action}". Use "create", "update", "list", "list_runs", "delete", "pause", or "resume".`;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -88,75 +100,30 @@ export class CronTool implements Tool, OnModuleInit {
   }
 
   private async handleCreate(args: Record<string, unknown>): Promise<string> {
-    const name = String(args.name ?? '').trim();
-    const task = String(args.task ?? '').trim();
-    const scheduleType = String(args.schedule_type ?? 'cron').trim() as CronScheduleType;
-    const schedule = String(args.schedule ?? '').trim();
-    const maxRuns = Number(args.max_runs) || 0;
+    return this.management.createJob(args);
+  }
 
-    if (!name) return 'Error: "name" is required for create.';
-    if (!task) return 'Error: "task" is required for create.';
-    if (!schedule) return 'Error: "schedule" is required for create.';
-    if (!['cron', 'interval', 'once'].includes(scheduleType)) {
-      return `Error: invalid schedule_type "${scheduleType}". Use "cron", "interval", or "once".`;
-    }
-
-    const job = await this.scheduler.createJob({ name, task, scheduleType, schedule, maxRuns });
-
-    const lines = [
-      'Cron job created successfully.',
-      `ID: ${job.id}`,
-      `Name: ${job.name}`,
-      `Schedule: ${job.scheduleType} — ${job.schedule}`,
-      `Next run: ${job.nextRunAt ?? 'not scheduled'}`,
-      `Max runs: ${job.maxRuns === 0 ? 'unlimited' : job.maxRuns}`,
-    ];
-    return lines.join('\n');
+  private async handleUpdate(args: Record<string, unknown>): Promise<string> {
+    return this.management.updateJob(args);
   }
 
   private async handleList(): Promise<string> {
-    const jobs = await this.scheduler.listJobs();
+    return this.management.listJobs();
+  }
 
-    if (jobs.length === 0) return 'No scheduled jobs.';
-
-    const lines = [`${jobs.length} scheduled job(s):\n`];
-
-    for (const job of jobs) {
-      const status = job.enabled ? '✅ active' : '⏸ paused';
-      lines.push(`- **${job.name}** (${status})`);
-      lines.push(`  ID: ${job.id}`);
-      lines.push(`  Schedule: ${job.scheduleType} — ${job.schedule}`);
-      lines.push(`  Task: ${job.task}`);
-      lines.push(`  Runs: ${job.runCount}${job.maxRuns > 0 ? '/' + job.maxRuns : ''}`);
-      lines.push(`  Next: ${job.nextRunAt ?? '—'}`);
-      lines.push(`  Last: ${job.lastRunAt ?? 'never'}`);
-      lines.push('');
-    }
-
-    return lines.join('\n').trim();
+  private async handleListRuns(args: Record<string, unknown>): Promise<string> {
+    return this.management.listRuns(args);
   }
 
   private async handleDelete(args: Record<string, unknown>): Promise<string> {
-    const id = String(args.id ?? '').trim();
-    if (!id) return 'Error: "id" is required for delete. Use "list" to see job IDs.';
-
-    const deleted = await this.scheduler.deleteJob(id);
-    return deleted ? `Job ${id} deleted.` : `Job ${id} not found.`;
+    return this.management.deleteJob(args);
   }
 
   private async handlePause(args: Record<string, unknown>): Promise<string> {
-    const id = String(args.id ?? '').trim();
-    if (!id) return 'Error: "id" is required for pause.';
-
-    const job = await this.scheduler.pauseJob(id);
-    return job ? `Job "${job.name}" paused.` : `Job ${id} not found.`;
+    return this.management.pauseJob(args);
   }
 
   private async handleResume(args: Record<string, unknown>): Promise<string> {
-    const id = String(args.id ?? '').trim();
-    if (!id) return 'Error: "id" is required for resume.';
-
-    const job = await this.scheduler.resumeJob(id);
-    return job ? `Job "${job.name}" resumed. Next run: ${job.nextRunAt ?? '—'}` : `Job ${id} not found.`;
+    return this.management.resumeJob(args);
   }
 }

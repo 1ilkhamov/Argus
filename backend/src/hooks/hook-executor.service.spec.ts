@@ -125,6 +125,7 @@ describe('HookExecutorService', () => {
       expect(notifyTool.sendNotification).toHaveBeenCalledWith(
         expect.stringContaining('github-push'),
         expect.stringContaining('Push analyzed'),
+        expect.objectContaining({ actor: 'system', origin: 'hook_executor', correlationId: 'hook-1' }),
       );
     });
 
@@ -169,6 +170,7 @@ describe('HookExecutorService', () => {
       expect(notifyTool.sendNotification).toHaveBeenCalledWith(
         expect.stringContaining('github-push'),
         expect.stringContaining('failed'),
+        expect.objectContaining({ actor: 'system', origin: 'hook_executor', correlationId: 'hook-1' }),
       );
     });
 

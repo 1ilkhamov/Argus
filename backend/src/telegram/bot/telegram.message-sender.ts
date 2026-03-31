@@ -1,6 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Telegraf } from 'telegraf';
 
+import { TelegramOutboundService } from '../../telegram-runtime/telegram-outbound.service';
+import type { TelegramOutboundActor, TelegramOutboundOrigin } from '../../telegram-runtime/telegram-runtime.types';
+
+export interface TelegramBotReplyMarkup {
+  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+}
+
+export interface TelegramBotSendOptions {
+  actor?: TelegramOutboundActor;
+  origin?: TelegramOutboundOrigin;
+  scopeKey?: string;
+  conversationId?: string;
+  correlationId?: string;
+  audit?: boolean;
+  replyMarkup?: TelegramBotReplyMarkup;
+}
+
 /**
  * Handles sending messages back to Telegram, including:
  * - Standard Markdown → Telegram HTML conversion
@@ -13,6 +30,10 @@ export class TelegramMessageSender {
   private readonly logger = new Logger(TelegramMessageSender.name);
 
   private static readonly MAX_MESSAGE_LENGTH = 4096;
+
+  constructor(
+    private readonly outboundService: TelegramOutboundService,
+  ) {}
 
   /**
    * Send "typing..." indicator to the chat.
@@ -28,34 +49,46 @@ export class TelegramMessageSender {
   /**
    * Send a standard Markdown text (from LLM). Converts to HTML for Telegram.
    */
-  async sendText(bot: Telegraf, chatId: number, text: string): Promise<number | undefined> {
+  async sendText(
+    bot: Telegraf,
+    chatId: number,
+    text: string,
+    options?: TelegramBotSendOptions,
+  ): Promise<number | undefined> {
     const html = this.markdownToHtml(text);
-    return this.sendHtml(bot, chatId, html);
+    return this.sendHtml(bot, chatId, html, options);
   }
 
   /**
    * Send pre-formatted HTML directly to Telegram.
    */
-  async sendHtml(bot: Telegraf, chatId: number, html: string): Promise<number | undefined> {
+  async sendHtml(
+    bot: Telegraf,
+    chatId: number,
+    html: string,
+    options?: TelegramBotSendOptions,
+  ): Promise<number | undefined> {
     const chunks = this.splitMessage(html);
     let lastMessageId: number | undefined;
 
     for (const chunk of chunks) {
       try {
-        const sent = await bot.telegram.sendMessage(chatId, chunk, {
-          parse_mode: 'HTML',
-          link_preview_options: { is_disabled: true },
+        lastMessageId = await this.executeBotOutbound(chatId, chunk, options, async () => {
+          try {
+            const sent = await bot.telegram.sendMessage(chatId, chunk, {
+              parse_mode: 'HTML',
+              link_preview_options: { is_disabled: true },
+              reply_markup: options?.replyMarkup,
+            });
+            return sent.message_id;
+          } catch {
+            const plain = chunk.replace(/<[^>]+>/g, '');
+            const sent = await bot.telegram.sendMessage(chatId, plain, this.buildPlainTextOptions(options));
+            return sent.message_id;
+          }
         });
-        lastMessageId = sent.message_id;
       } catch {
-        // Fallback: strip HTML tags and send as plain text
-        const plain = chunk.replace(/<[^>]+>/g, '');
-        try {
-          const sent = await bot.telegram.sendMessage(chatId, plain);
-          lastMessageId = sent.message_id;
-        } catch (fallbackErr) {
-          this.logger.error(`Failed to send message to ${chatId}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
-        }
+        this.logger.error(`Failed to send message to ${chatId}`);
       }
     }
 
@@ -66,10 +99,17 @@ export class TelegramMessageSender {
    * Send an initial placeholder message for progressive editing.
    * Returns the message ID for subsequent edits.
    */
-  async sendPlaceholder(bot: Telegraf, chatId: number, text = '⏳'): Promise<number | undefined> {
+  async sendPlaceholder(
+    bot: Telegraf,
+    chatId: number,
+    text = '⏳',
+    options?: TelegramBotSendOptions,
+  ): Promise<number | undefined> {
     try {
-      const sent = await bot.telegram.sendMessage(chatId, text);
-      return sent.message_id;
+      return await this.executeBotOutbound(chatId, text, options, async () => {
+        const sent = await bot.telegram.sendMessage(chatId, text, this.buildPlainTextOptions(options));
+        return sent.message_id;
+      });
     } catch (err) {
       this.logger.error(`Failed to send placeholder to ${chatId}: ${err instanceof Error ? err.message : String(err)}`);
       return undefined;
@@ -79,22 +119,31 @@ export class TelegramMessageSender {
   /**
    * Edit an existing message. Converts standard Markdown to HTML.
    */
-  async editMessage(bot: Telegraf, chatId: number, messageId: number, text: string): Promise<boolean> {
+  async editMessage(
+    bot: Telegraf,
+    chatId: number,
+    messageId: number,
+    text: string,
+    options?: TelegramBotSendOptions,
+  ): Promise<boolean> {
     const html = this.markdownToHtml(text);
     const truncated = html.length > TelegramMessageSender.MAX_MESSAGE_LENGTH
       ? html.slice(0, TelegramMessageSender.MAX_MESSAGE_LENGTH - 3) + '...'
       : html;
 
     try {
-      await bot.telegram.editMessageText(chatId, messageId, undefined, truncated, {
-        parse_mode: 'HTML',
+      await this.executeBotOutbound(chatId, truncated, options, async () => {
+        await bot.telegram.editMessageText(chatId, messageId, undefined, truncated, {
+          parse_mode: 'HTML',
+        });
       });
       return true;
     } catch {
-      // Fallback without formatting
       const plain = truncated.replace(/<[^>]+>/g, '');
       try {
-        await bot.telegram.editMessageText(chatId, messageId, undefined, plain);
+        await this.executeBotOutbound(chatId, plain, options, async () => {
+          await bot.telegram.editMessageText(chatId, messageId, undefined, plain);
+        });
         return true;
       } catch (fallbackErr) {
         const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
@@ -110,9 +159,16 @@ export class TelegramMessageSender {
   /**
    * Send an error message to the user.
    */
-  async sendError(bot: Telegraf, chatId: number, error: string): Promise<void> {
+  async sendError(
+    bot: Telegraf,
+    chatId: number,
+    error: string,
+    options?: TelegramBotSendOptions,
+  ): Promise<void> {
     try {
-      await bot.telegram.sendMessage(chatId, `⚠️ ${error}`);
+      await this.executeBotOutbound(chatId, `⚠️ ${error}`, options, async () => {
+        await bot.telegram.sendMessage(chatId, `⚠️ ${error}`, this.buildPlainTextOptions(options));
+      });
     } catch (err) {
       this.logger.error(`Failed to send error to ${chatId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -233,5 +289,39 @@ export class TelegramMessageSender {
     }
 
     return chunks;
+  }
+
+  private buildPlainTextOptions(options?: TelegramBotSendOptions): { reply_markup?: TelegramBotReplyMarkup } | undefined {
+    if (!options?.replyMarkup) {
+      return undefined;
+    }
+
+    return { reply_markup: options.replyMarkup };
+  }
+
+  private async executeBotOutbound<T>(
+    chatId: number,
+    payloadPreview: string,
+    options: TelegramBotSendOptions | undefined,
+    perform: () => Promise<T>,
+  ): Promise<T> {
+    if (options?.audit === false) {
+      return perform();
+    }
+
+    return this.outboundService.executeSend(
+      {
+        channel: 'telegram_bot',
+        action: 'send_message',
+        actor: options?.actor ?? 'system',
+        origin: options?.origin ?? 'telegram_message_sender',
+        chatId: String(chatId),
+        scopeKey: options?.scopeKey,
+        conversationId: options?.conversationId,
+        correlationId: options?.correlationId,
+        payloadPreview,
+      },
+      perform,
+    );
   }
 }

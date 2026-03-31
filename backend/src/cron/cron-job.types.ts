@@ -1,5 +1,9 @@
 /** Supported schedule types */
-export type CronScheduleType = 'cron' | 'interval' | 'once';
+export const CRON_SCHEDULE_TYPES = ['cron', 'interval', 'once'] as const;
+export type CronScheduleType = (typeof CRON_SCHEDULE_TYPES)[number];
+
+export const CRON_JOB_NOTIFICATION_POLICIES = ['always', 'never'] as const;
+export type CronJobNotificationPolicy = (typeof CRON_JOB_NOTIFICATION_POLICIES)[number];
 
 export interface CronJob {
   id: string;
@@ -26,6 +30,7 @@ export interface CronJob {
   runCount: number;
   /** Maximum number of runs (0 = unlimited) */
   maxRuns: number;
+  notificationPolicy: CronJobNotificationPolicy;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,4 +41,15 @@ export interface CreateCronJobParams {
   scheduleType: CronScheduleType;
   schedule: string;
   maxRuns?: number;
+  notificationPolicy?: CronJobNotificationPolicy;
+}
+
+export interface UpdateCronJobParams {
+  name?: string;
+  task?: string;
+  scheduleType?: CronScheduleType;
+  schedule?: string;
+  maxRuns?: number;
+  notificationPolicy?: CronJobNotificationPolicy;
+  enabled?: boolean;
 }

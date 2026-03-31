@@ -1,5 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
+import { CronJobRunRepository } from '../../../cron/cron-run.repository';
+import type { CronJobFireContext, CronJobRunNotificationStatus, CronJobRunResultStatus, CronJobRunStatus } from '../../../cron/cron-run.types';
 import type { LlmMessage } from '../../../llm/interfaces/llm.interface';
 import { CronSchedulerService } from '../../../cron/cron-scheduler.service';
 import type { CronJob } from '../../../cron/cron-job.types';
@@ -19,17 +21,22 @@ export class CronExecutorService implements OnModuleInit {
 
   constructor(
     private readonly scheduler: CronSchedulerService,
+    private readonly runRepository: CronJobRunRepository,
     private readonly toolOrchestrator: ToolOrchestratorService,
     private readonly notifyTool: NotifyTool,
   ) {}
 
   onModuleInit(): void {
-    this.scheduler.setJobHandler((job) => this.executeJob(job));
+    this.scheduler.setJobHandler((job, context) => this.executeJob(job, context));
     this.logger.log('Cron executor wired to scheduler');
   }
 
-  private async executeJob(job: CronJob): Promise<void> {
+  private async executeJob(job: CronJob, context: CronJobFireContext): Promise<void> {
     this.logger.log(`Executing cron job: "${job.name}" — task: "${job.task}"`);
+
+    let outputPreview: string | null = null;
+    let toolRoundsUsed = 0;
+    let toolNames: string[] = [];
 
     try {
       const messages: LlmMessage[] = [
@@ -49,33 +56,114 @@ export class CronExecutorService implements OnModuleInit {
 
       // Use tool orchestrator so cron jobs can leverage web_search, web_fetch, etc.
       const toolResult = await this.toolOrchestrator.completeWithTools(messages);
-      let result = toolResult.content.trim();
+      toolRoundsUsed = toolResult.toolRoundsUsed;
+      toolNames = toolResult.toolCallLog.map((call) => call.name);
+      const result = toolResult.content.trim();
 
       if (toolResult.toolRoundsUsed > 0) {
         this.logger.debug(`Cron job "${job.name}" used tools: ${toolResult.toolCallLog.map((c) => c.name).join(', ')}`);
       }
 
-      if (!result) {
-        result = `Cron job "${job.name}" executed but produced no output.`;
+      const execution = this.resolveExecutionPayload(job.name, result, toolNames);
+      if (execution.resultStatus === 'noop') {
+        await this.runRepository.update(context.runId, {
+          finishedAt: new Date().toISOString(),
+          status: 'noop',
+          resultStatus: 'noop',
+          notificationStatus: 'skipped',
+          toolRoundsUsed,
+          toolNames,
+        });
+        this.logger.log(`Cron job "${job.name}" completed with noop result`);
+        return;
       }
 
-      // Send notification
-      await this.notifyTool.sendNotification(`🕐 ${job.name}`, result);
+      outputPreview = this.normalizePreview(execution.message);
+      let notificationStatus: CronJobRunNotificationStatus = 'skipped';
+      let notificationErrorMessage: string | null = null;
 
-      this.logger.log(`Cron job "${job.name}" completed, notification sent`);
+      if (job.notificationPolicy === 'always') {
+        try {
+          await this.notifyTool.sendNotification(`🕐 ${job.name}`, execution.message, {
+            actor: 'cron',
+            origin: 'cron_executor',
+            correlationId: context.runId,
+          });
+          notificationStatus = 'sent';
+        } catch (notifyError) {
+          notificationStatus = 'failed';
+          notificationErrorMessage = notifyError instanceof Error ? notifyError.message : String(notifyError);
+          this.logger.warn(`Cron job "${job.name}" completed but notification failed: ${notificationErrorMessage}`);
+        }
+      }
+
+      const status: CronJobRunStatus = notificationStatus === 'sent' ? 'notified' : 'success';
+      await this.runRepository.update(context.runId, {
+        finishedAt: new Date().toISOString(),
+        status,
+        resultStatus: 'success',
+        notificationStatus,
+        outputPreview,
+        notificationErrorMessage,
+        toolRoundsUsed,
+        toolNames,
+      });
+
+      this.logger.log(`Cron job "${job.name}" completed with status ${status}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Cron job "${job.name}" failed: ${msg}`);
 
-      // Still try to notify about the failure
-      try {
-        await this.notifyTool.sendNotification(
-          `❌ ${job.name}`,
-          `Scheduled task failed: ${msg}`,
-        );
-      } catch {
-        // Notification itself failed — nothing more we can do
+      let notificationStatus: CronJobRunNotificationStatus = 'skipped';
+      let notificationErrorMessage: string | null = null;
+
+      if (job.notificationPolicy === 'always') {
+        try {
+          await this.notifyTool.sendNotification(
+            `❌ ${job.name}`,
+            `Scheduled task failed: ${msg}`,
+            {
+              actor: 'cron',
+              origin: 'cron_executor',
+              correlationId: context.runId,
+            },
+          );
+          notificationStatus = 'sent';
+        } catch (notifyError) {
+          notificationStatus = 'failed';
+          notificationErrorMessage = notifyError instanceof Error ? notifyError.message : String(notifyError);
+        }
       }
+
+      await this.runRepository.update(context.runId, {
+        finishedAt: new Date().toISOString(),
+        status: 'failed',
+        resultStatus: 'failed',
+        notificationStatus,
+        outputPreview,
+        errorMessage: msg,
+        notificationErrorMessage,
+        toolRoundsUsed,
+        toolNames,
+      });
     }
   }
-}
+
+  private resolveExecutionPayload(jobName: string, result: string, toolNames: string[]): { resultStatus: CronJobRunResultStatus; message: string } | { resultStatus: 'noop'; message: null } {
+    if (result) {
+      return { resultStatus: 'success', message: result };
+    }
+    if (toolNames.length > 0) {
+      return {
+        resultStatus: 'success',
+        message: `Cron job "${jobName}" completed using ${toolNames.join(', ')} without a textual summary.`,
+      };
+    }
+    return { resultStatus: 'noop', message: null };
+  }
+
+  private normalizePreview(value: string): string {
+    const text = value.trim();
+    return text.length <= 300 ? text : `${text.slice(0, 299)}…`;
+  }
+ }

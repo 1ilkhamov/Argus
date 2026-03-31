@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type AppPage = 'chat' | 'settings' | 'memory' | 'tools';
+export type AppPage = 'chat' | 'settings' | 'memory' | 'tools' | 'ops';
 
 interface DashboardState {
   activePage: AppPage;

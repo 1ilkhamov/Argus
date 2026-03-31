@@ -2,7 +2,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 import { ToolRegistryService } from '../../core/registry/tool-registry.service';
 import type { Tool, ToolDefinition, ToolExecutionContext } from '../../core/tool.types';
+import { TelegramClientMonitorRuntimeService } from '../../../telegram-client/telegram-client-monitor-runtime.service';
 import { TelegramClientService } from '../../../telegram-client/telegram-client.service';
+import { TelegramClientWriteService } from '../../../telegram-client/telegram-client-write.service';
 import { TelegramClientRepository } from '../../../telegram-client/telegram-client.repository';
 import type { TgChatMode } from '../../../telegram-client/telegram-client.types';
 import { isTgChatMode } from '../../../telegram-client/telegram-client.types';
@@ -20,6 +22,7 @@ export class TelegramClientTool implements Tool, OnModuleInit {
       '- read_messages: Read recent messages from a specific chat\n' +
       '- send_message: Send a message to a chat (as the connected user)\n' +
       '- list_monitored: List all monitored chats and their modes\n' +
+      '- list_runtime: List live runtime state for monitored chats (queue, cooldown, last reply, errors)\n' +
       '- add_monitored: Add a chat to monitoring (auto-reply, read-only, manual, or disabled)\n' +
       '- update_monitored: Update monitoring settings for a chat\n' +
       '- remove_monitored: Remove a chat from monitoring\n' +
@@ -33,7 +36,7 @@ export class TelegramClientTool implements Tool, OnModuleInit {
           description: 'Action to perform.',
           enum: [
             'list_dialogs', 'read_messages', 'send_message',
-            'list_monitored', 'add_monitored', 'update_monitored', 'remove_monitored',
+            'list_monitored', 'list_runtime', 'add_monitored', 'update_monitored', 'remove_monitored',
             'status',
           ],
         },
@@ -79,7 +82,9 @@ export class TelegramClientTool implements Tool, OnModuleInit {
 
   constructor(
     private readonly registry: ToolRegistryService,
+    private readonly runtimeService: TelegramClientMonitorRuntimeService,
     private readonly clientService: TelegramClientService,
+    private readonly clientWriteService: TelegramClientWriteService,
     private readonly repository: TelegramClientRepository,
   ) {}
 
@@ -108,9 +113,11 @@ export class TelegramClientTool implements Tool, OnModuleInit {
         case 'read_messages':
           return await this.handleReadMessages(args);
         case 'send_message':
-          return await this.handleSendMessage(args);
+          return await this.handleSendMessage(args, context);
         case 'list_monitored':
           return await this.handleListMonitored();
+        case 'list_runtime':
+          return await this.handleListRuntime();
         case 'add_monitored':
           return await this.handleAddMonitored(args);
         case 'update_monitored':
@@ -118,7 +125,7 @@ export class TelegramClientTool implements Tool, OnModuleInit {
         case 'remove_monitored':
           return await this.handleRemoveMonitored(args);
         default:
-          return `Unknown action: "${action}". Use one of: list_dialogs, read_messages, send_message, list_monitored, add_monitored, update_monitored, remove_monitored, status.`;
+          return `Unknown action: "${action}". Use one of: list_dialogs, read_messages, send_message, list_monitored, list_runtime, add_monitored, update_monitored, remove_monitored, status.`;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -173,14 +180,23 @@ export class TelegramClientTool implements Tool, OnModuleInit {
     return `Messages (${messages.length}, newest first):\n\n${lines.join('\n')}`;
   }
 
-  private async handleSendMessage(args: Record<string, unknown>): Promise<string> {
+  private async handleSendMessage(args: Record<string, unknown>, context?: ToolExecutionContext): Promise<string> {
     const chatId = String(args.chat_id ?? '').trim();
     const text = String(args.text ?? '').trim();
     if (!chatId) return 'Error: "chat_id" is required.';
     if (!text) return 'Error: "text" is required.';
 
     const replyTo = args.reply_to ? Number(args.reply_to) : undefined;
-    const msgId = await this.clientService.sendMessage(chatId, text, replyTo);
+    const msgId = await this.clientWriteService.sendMessage({
+      chatId,
+      text,
+      replyTo,
+      actor: context?.conversationId ? 'human' : 'agent',
+      origin: 'telegram_client_tool',
+      scopeKey: context?.scopeKey,
+      conversationId: context?.conversationId,
+      correlationId: context?.messageId ?? context?.conversationId,
+    });
     return `Message sent successfully (message ID: ${msgId}).`;
   }
 
@@ -193,6 +209,32 @@ export class TelegramClientTool implements Tool, OnModuleInit {
     );
 
     return `Monitored chats (${chats.length}):\n\n${lines.join('\n\n')}`;
+  }
+
+  private async handleListRuntime(): Promise<string> {
+    const states = await this.runtimeService.listStates();
+    if (!states.length) return 'No monitor runtime state available.';
+
+    const lines = states.map((state, index) => {
+      const parts = [
+        `${index + 1}. "${state.chatTitle}" (ID: ${state.chatId})`,
+        `   Mode: ${state.mode} | Status: ${state.status}`,
+        `   Queue: ${state.queueLength} | Active: ${state.queueActive}`,
+        `   Last inbound: ${state.lastInboundAt ?? '—'}${state.lastInboundSenderName ? ` from ${state.lastInboundSenderName}` : ''}`,
+        `   Last reply: ${state.lastReplyAt ?? '—'}${state.lastReplyMessageId ? ` (msg ${state.lastReplyMessageId})` : ''}`,
+        `   Cooldown until: ${state.cooldownUntil ?? '—'}`,
+        `   Last conversation: ${state.lastConversationId ?? '—'}`,
+        `   Last processed: ${state.lastProcessedAt ?? '—'}`,
+      ];
+
+      if (state.lastErrorMessage) {
+        parts.push(`   Error: ${state.lastErrorMessage}`);
+      }
+
+      return parts.join('\n');
+    });
+
+    return `Monitor runtime (${states.length}):\n\n${lines.join('\n\n')}`;
   }
 
   private async handleAddMonitored(args: Record<string, unknown>): Promise<string> {

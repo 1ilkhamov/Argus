@@ -6,6 +6,7 @@ import { useDashboardStore } from '@/stores/ui/dashboard.store';
 import { Header, NavRail, Sidebar } from '@/components/layout';
 import { ChatContainer } from '@/components/chat';
 import { MemoryPanel } from '@/components/memory';
+import { OpsPanel } from '@/components/ops';
 import { ToolsPanel } from '@/components/tools';
 import { SettingsContent } from '@/components/settings/SettingsContent';
 
@@ -83,6 +84,11 @@ export default function App() {
               {activePage === 'memory' && (
                 <div className="surface-card flex-1 overflow-hidden rounded-[24px]">
                   <MemoryPanel />
+                </div>
+              )}
+              {activePage === 'ops' && (
+                <div className="surface-card flex-1 overflow-hidden rounded-[24px]">
+                  <OpsPanel />
                 </div>
               )}
               {activePage === 'tools' && (

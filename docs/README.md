@@ -44,6 +44,8 @@ Argus/
   - frontend structure, pages, API integration, runtime behavior
 - `operations.md`
   - local setup, env files, Docker, tests, data locations, reset workflow
+- `release-0.2.0.md`
+  - version-specific runbook for ops/runtime migration, smoke checks, and rollback
 - `soul-customization.md`
   - how the agent soul config is loaded and how to override it safely
 
@@ -53,7 +55,8 @@ Argus/
 2. `docs/backend.md`
 3. `docs/frontend.md`
 4. `docs/operations.md`
-5. `docs/soul-customization.md` if you need personality customization
+5. `docs/release-0.2.0.md` if you are preparing or reviewing the 0.2.0 release
+6. `docs/soul-customization.md` if you need personality customization
 
 ## Documentation scope
 

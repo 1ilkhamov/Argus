@@ -6,6 +6,17 @@ import { ToolRegistryService } from '../../core/registry/tool-registry.service';
 import type { Tool, ToolDefinition, ToolExecutionContext } from '../../core/tool.types';
 import { PendingNotifyService } from '../../core/pending-notify.service';
 import { SettingsService } from '../../../settings/settings.service';
+import { TelegramOutboundService } from '../../../telegram-runtime/telegram-outbound.service';
+import type { TelegramOutboundActor, TelegramOutboundOrigin } from '../../../telegram-runtime/telegram-runtime.types';
+
+interface NotifyDeliveryContext {
+  actor: TelegramOutboundActor;
+  origin: TelegramOutboundOrigin;
+  scopeKey?: string;
+  conversationId?: string;
+  correlationId?: string;
+  sourceChat?: { chatId: string; chatTitle: string } | null;
+}
 
 /**
  * Notification tool — sends notifications to the user via:
@@ -55,6 +66,7 @@ export class NotifyTool implements Tool, OnModuleInit {
     private readonly configService: ConfigService,
     private readonly settingsService: SettingsService,
     private readonly pendingNotify: PendingNotifyService,
+    private readonly outboundService: TelegramOutboundService,
   ) {
     this.envTelegramBotToken = this.configService.get<string>('tools.notify.telegramBotToken', '');
     this.envTelegramChatId = this.configService.get<string>('tools.notify.telegramChatId', '');
@@ -74,6 +86,14 @@ export class NotifyTool implements Tool, OnModuleInit {
 
     // Detect tg-client scope → extract source chat info for reply routing
     const sourceChat = this.resolveSourceChat(context);
+    const deliveryContext: NotifyDeliveryContext = {
+      actor: 'agent',
+      origin: 'notify_tool',
+      scopeKey: context?.scopeKey,
+      conversationId: context?.conversationId,
+      correlationId: context?.messageId ?? context?.conversationId,
+      sourceChat,
+    };
 
     const results: string[] = [];
 
@@ -86,7 +106,7 @@ export class NotifyTool implements Tool, OnModuleInit {
       const { botToken, chatId } = await this.resolveTelegramCredentials();
       if (botToken && chatId) {
         const telegramResult = await this.sendTelegramWithReply(
-          title, message, botToken, chatId, sourceChat,
+          title, message, botToken, chatId, sourceChat, deliveryContext,
         );
         results.push(telegramResult);
       } else if (channel === 'telegram') {
@@ -99,11 +119,18 @@ export class NotifyTool implements Tool, OnModuleInit {
 
   // ─── Public method for cron scheduler ─────────────────────────────────────
 
-  async sendNotification(title: string, message: string): Promise<void> {
+  async sendNotification(title: string, message: string, deliveryContext?: Partial<NotifyDeliveryContext>): Promise<void> {
     await this.sendDesktop(title, message);
     const { botToken, chatId } = await this.resolveTelegramCredentials();
     if (botToken && chatId) {
-      await this.sendTelegram(title, message, botToken, chatId);
+      await this.sendTelegram(title, message, botToken, chatId, {
+        actor: deliveryContext?.actor ?? 'system',
+        origin: deliveryContext?.origin ?? 'system',
+        scopeKey: deliveryContext?.scopeKey,
+        conversationId: deliveryContext?.conversationId,
+        correlationId: deliveryContext?.correlationId,
+        sourceChat: deliveryContext?.sourceChat ?? null,
+      });
     }
   }
 
@@ -152,52 +179,64 @@ export class NotifyTool implements Tool, OnModuleInit {
     botToken: string,
     chatId: string,
     sourceChat: { chatId: string; chatTitle: string } | null,
+    deliveryContext: NotifyDeliveryContext,
   ): Promise<string> {
     try {
       const text = sourceChat
         ? `📨 ${sourceChat.chatTitle}\n\n${message}`
         : `${title}\n${message}`;
-      const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+      return await this.outboundService.executeSend(
+        {
+          channel: 'telegram_bot',
+          action: 'notify',
+          actor: deliveryContext.actor,
+          origin: deliveryContext.origin,
+          chatId,
+          scopeKey: deliveryContext.scopeKey,
+          conversationId: deliveryContext.conversationId,
+          correlationId: deliveryContext.correlationId,
+          payloadPreview: text,
+        },
+        async () => {
+          const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
 
-      const body: Record<string, unknown> = {
-        chat_id: chatId,
-        text,
-      };
+          const body: Record<string, unknown> = {
+            chat_id: chatId,
+            text,
+          };
 
-      // Add reply button if from tg-client
-      if (sourceChat) {
-        body.reply_markup = {
-          inline_keyboard: [
-            [{ text: `📩 Ответить в "${sourceChat.chatTitle}"`, callback_data: `notify_reply:${sourceChat.chatId}` }],
-          ],
-        };
-      }
+          if (sourceChat) {
+            body.reply_markup = {
+              inline_keyboard: [
+                [{ text: `📩 Ответить в "${sourceChat.chatTitle}"`, callback_data: `notify_reply:${sourceChat.chatId}` }],
+              ],
+            };
+          }
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(10_000),
-      });
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(10_000),
+          });
 
-      const json = await response.json() as { ok?: boolean; result?: { message_id?: number }; description?: string };
+          const json = await response.json() as { ok?: boolean; result?: { message_id?: number }; description?: string };
+          if (!response.ok || !json.ok) {
+            throw new Error(`Telegram send failed (${response.status})${json.description ? `: ${json.description}` : ''}`);
+          }
 
-      if (!response.ok || !json.ok) {
-        this.logger.warn(`Telegram send failed: ${response.status} ${json.description ?? ''}`);
-        return `Telegram: failed (${response.status})`;
-      }
+          if (sourceChat && json.result?.message_id) {
+            this.pendingNotify.setPending(json.result.message_id, {
+              chatId: sourceChat.chatId,
+              chatTitle: sourceChat.chatTitle,
+              question: message,
+              createdAt: Date.now(),
+            });
+          }
 
-      // Save pending request so bot can route the reply
-      if (sourceChat && json.result?.message_id) {
-        this.pendingNotify.setPending(json.result.message_id, {
-          chatId: sourceChat.chatId,
-          chatTitle: sourceChat.chatTitle,
-          question: message,
-          createdAt: Date.now(),
-        });
-      }
-
-      return 'Telegram: sent';
+          return 'Telegram: sent';
+        },
+      );
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Telegram send error: ${msg}`);
@@ -206,8 +245,14 @@ export class NotifyTool implements Tool, OnModuleInit {
   }
 
   /** Legacy method kept for sendNotification (cron) */
-  private async sendTelegram(title: string, message: string, botToken: string, chatId: string): Promise<string> {
-    return this.sendTelegramWithReply(title, message, botToken, chatId, null);
+  private async sendTelegram(
+    title: string,
+    message: string,
+    botToken: string,
+    chatId: string,
+    deliveryContext: NotifyDeliveryContext,
+  ): Promise<string> {
+    return this.sendTelegramWithReply(title, message, botToken, chatId, null, deliveryContext);
   }
 
   /**

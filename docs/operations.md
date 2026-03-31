@@ -172,6 +172,31 @@ If you want a clean local reset, the usual targets are:
 
 Stop the backend before deleting SQLite files.
 
+## Persistent ops/runtime data in 0.2.0
+
+For the 0.2.0 ops release, the SQLite file from `STORAGE_MEMORY_DB_FILE` is release-critical even when `STORAGE_DRIVER=postgres`.
+
+Why:
+
+- chat and managed-memory repositories follow `STORAGE_DRIVER`
+- cron, monitor state, Telegram monitored chats, outbound audit, and pending notify routing still persist in the SQLite runtime DB
+
+Operational rule:
+
+- back up `STORAGE_MEMORY_DB_FILE`
+- back up `STORAGE_MEMORY_DB_FILE-wal`
+- back up `STORAGE_MEMORY_DB_FILE-shm`
+
+Boot-time repository initialization applies additive/idempotent migrations for 0.2.0, including:
+
+- `tg_client_chats.chat_type`
+- `cron_jobs.notification_policy`
+- `cron_job_runs.result_status`
+- `cron_job_runs.notification_status`
+- `cron_job_runs.notification_error_message`
+
+See `docs/release-0.2.0.md` for the exact rollout, smoke-check, and rollback procedure.
+
 ## Docker Compose
 
 `docker-compose.yml` defines these services:

@@ -1,9 +1,12 @@
 import { Module, OnModuleInit } from '@nestjs/common';
 
 import { LlmModule } from '../llm/llm.module';
+import { LogsModule } from '../logs/logs.module';
+import { MonitorsModule } from '../monitors/monitors.module';
 import { SettingsModule } from '../settings/settings.module';
 import { MemoryModule } from '../memory/memory.module';
 import { CronModule } from '../cron/cron.module';
+import { TelegramRuntimeModule } from '../telegram-runtime/telegram-runtime.module';
 // ─── Core infrastructure ─────────────────────────────────────────────────────
 import { ToolRegistryService } from './core/registry/tool-registry.service';
 import { ToolExecutorService } from './core/execution/tool-executor.service';
@@ -23,6 +26,9 @@ import { KnowledgeSearchTool } from './builtin/memory/knowledge-search.tool';
 
 // ─── Builtin: system ─────────────────────────────────────────────────────────
 import { SystemRunTool } from './builtin/system/system-run.tool';
+import { EventAuditTool } from './builtin/system/event-audit.tool';
+import { LogSearchTool } from './builtin/system/log-search.tool';
+import { MonitorManageTool } from './builtin/system/monitor-manage.tool';
 import { FileOpsTool } from './builtin/system/file-ops.tool';
 import { ClipboardTool } from './builtin/system/clipboard.tool';
 import { NotifyTool } from './builtin/system/notify.tool';
@@ -42,6 +48,8 @@ import { DocumentGenTool } from './builtin/compute/document-gen.tool';
 
 // ─── Builtin: scheduling ─────────────────────────────────────────────────────
 import { CronTool } from './builtin/scheduling/cron.tool';
+import { JobManageTool } from './builtin/scheduling/job-manage.tool';
+import { CronManagementToolService } from './builtin/scheduling/cron-management-tool.service';
 import { CronExecutorService } from './builtin/scheduling/cron-executor.service';
 
 // ─── Builtin: automation ─────────────────────────────────────────────────────
@@ -57,14 +65,16 @@ import { SubAgentService } from './builtin/orchestration/sub-agent.service';
 import { SubAgentTool } from './builtin/orchestration/sub-agent.tool';
 
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
+import { AdminApiKeyGuard } from '../common/guards/admin-api-key.guard';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard';
 import { RateLimitService } from '../common/services/rate-limit.service';
-import { ToolsController } from './api/tools.controller';
+import { NotifyRoutingController, ToolsController } from './api/tools.controller';
+import { PendingNotifyRepository } from './core/pending-notify.repository';
 import { PendingNotifyService } from './core/pending-notify.service';
 
 @Module({
-  imports: [LlmModule, SettingsModule, MemoryModule, CronModule, HooksModule, EmailModule],
-  controllers: [ToolsController],
+  imports: [LlmModule, SettingsModule, MemoryModule, CronModule, TelegramRuntimeModule, LogsModule, MonitorsModule, HooksModule, EmailModule],
+  controllers: [ToolsController, NotifyRoutingController],
   providers: [
     ToolSafetyService,
     ToolRegistryService,
@@ -75,9 +85,14 @@ import { PendingNotifyService } from './core/pending-notify.service';
     DateTimeTool,
     CalculatorTool,
     SystemRunTool,
+    EventAuditTool,
+    LogSearchTool,
+    MonitorManageTool,
     MemoryManageTool,
     NotifyTool,
     CronTool,
+    JobManageTool,
+    CronManagementToolService,
     FileOpsTool,
     ClipboardTool,
     VisionTool,
@@ -99,7 +114,9 @@ import { PendingNotifyService } from './core/pending-notify.service';
     ProcessTool,
     SubAgentService,
     SubAgentTool,
+    PendingNotifyRepository,
     PendingNotifyService,
+    AdminApiKeyGuard,
     ApiKeyGuard,
     RateLimitGuard,
     RateLimitService,

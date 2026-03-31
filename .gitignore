@@ -14,6 +14,7 @@ build/
 backend/data/
 backend/tmp/
 bin/
+plans/
 !cli/bin/
 !cli/bin/**
 

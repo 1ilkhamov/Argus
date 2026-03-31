@@ -8,6 +8,7 @@
 
 - README отражает текущее состояние проекта
 - `docs/` синхронизированы с кодом
+- если релиз требует version-specific runbook, он создан и указан в `docs/`
 - `backend/.env.example` и `frontend/.env.example` актуальны
 - `CHANGELOG.md` обновлён
 - нет случайных локальных файлов, runtime data и секретов
@@ -55,6 +56,7 @@ npm run start
 
 ### 2. Проверка runtime
 
+- сделан backup release-critical данных, включая `STORAGE_MEMORY_DB_FILE` и его `-wal` / `-shm` sidecars
 - backend стартует локально
 - frontend стартует локально
 - health endpoint отвечает
@@ -62,6 +64,7 @@ npm run start
 - browser mode через public sessions работает без скрытой proxy-магии
 - semantic memory путь работает с embeddings + Qdrant
 - env examples достаточно полны для нового пользователя
+- version-specific smoke checks пройдены, если для релиза есть отдельный runbook
 
 ### 3. Проверка качества
 
@@ -78,7 +81,12 @@ npm run start
 - создайте tag версии
 - создайте GitHub Release
 - используйте `CHANGELOG.md` и diff как основу release notes
+- если релиз содержит отдельный runbook, приложите ссылку на него в release notes
 - укажите breaking changes, если они есть
+
+## Version-specific runbooks
+
+- `docs/release-0.2.0.md` — migration story, smoke checks и rollback notes для ops/runtime release `0.2.0`
 
 ## Версионирование
 

@@ -121,6 +121,22 @@ export class TelegramClientMessagesRepository implements OnModuleInit {
     return rows.map((r) => this.rowToMessage(r)).reverse();
   }
 
+  async getLatestIncoming(chatId: string): Promise<TgStoredMessage | null> {
+    const db = this.getDatabase();
+    const row = db.prepare(
+      `SELECT * FROM tg_chat_messages WHERE chat_id = ? AND is_outgoing = 0 ORDER BY timestamp DESC LIMIT 1`,
+    ).get(chatId) as MessageRow | undefined;
+    return row ? this.rowToMessage(row) : null;
+  }
+
+  async getLatestOutgoing(chatId: string): Promise<TgStoredMessage | null> {
+    const db = this.getDatabase();
+    const row = db.prepare(
+      `SELECT * FROM tg_chat_messages WHERE chat_id = ? AND is_outgoing = 1 ORDER BY timestamp DESC LIMIT 1`,
+    ).get(chatId) as MessageRow | undefined;
+    return row ? this.rowToMessage(row) : null;
+  }
+
   async getMessageCount(chatId: string): Promise<number> {
     const db = this.getDatabase();
     const row = db.prepare(

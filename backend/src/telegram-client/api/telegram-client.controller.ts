@@ -11,6 +11,8 @@ import {
 
 import { AdminApiKeyGuard } from '../../common/guards/admin-api-key.guard';
 import { RateLimitGuard } from '../../common/guards/rate-limit.guard';
+import { TelegramClientMonitorRuntimeService } from '../telegram-client-monitor-runtime.service';
+import type { TelegramClientMonitorRuntimeState } from '../telegram-client-monitor-runtime.types';
 import { TelegramClientService } from '../telegram-client.service';
 import { TelegramClientRepository } from '../telegram-client.repository';
 import type {
@@ -33,6 +35,7 @@ export class TelegramClientController {
   constructor(
     private readonly clientService: TelegramClientService,
     private readonly repository: TelegramClientRepository,
+    private readonly runtimeService: TelegramClientMonitorRuntimeService,
   ) {}
 
   // ─── Status & lifecycle ─────────────────────────────────────────────────
@@ -121,6 +124,11 @@ export class TelegramClientController {
   @Get('chats')
   async listChats(): Promise<TgMonitoredChat[]> {
     return this.repository.findAll();
+  }
+
+  @Get('runtime')
+  async listRuntime(): Promise<TelegramClientMonitorRuntimeState[]> {
+    return this.runtimeService.listStates();
   }
 
   @Post('chats')

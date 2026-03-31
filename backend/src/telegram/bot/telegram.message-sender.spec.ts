@@ -11,11 +11,19 @@ function createMockBot(overrides: Record<string, jest.Mock> = {}): any {
   };
 }
 
+function createMockOutboundService(): any {
+  return {
+    executeSend: jest.fn(async (_metadata: unknown, perform: () => Promise<unknown>) => perform()),
+  };
+}
+
 describe('TelegramMessageSender', () => {
   let sender: TelegramMessageSender;
+  let outboundService: any;
 
   beforeEach(() => {
-    sender = new TelegramMessageSender();
+    outboundService = createMockOutboundService();
+    sender = new TelegramMessageSender(outboundService);
   });
 
   describe('sendTypingAction', () => {
@@ -83,7 +91,7 @@ describe('TelegramMessageSender', () => {
     it('sends placeholder and returns message ID', async () => {
       const bot = createMockBot();
       const msgId = await sender.sendPlaceholder(bot, 123);
-      expect(bot.telegram.sendMessage).toHaveBeenCalledWith(123, '⏳');
+      expect(bot.telegram.sendMessage).toHaveBeenCalledWith(123, '⏳', undefined);
       expect(msgId).toBe(42);
     });
 
@@ -142,7 +150,7 @@ describe('TelegramMessageSender', () => {
     it('sends error message with warning emoji', async () => {
       const bot = createMockBot();
       await sender.sendError(bot, 123, 'Something broke');
-      expect(bot.telegram.sendMessage).toHaveBeenCalledWith(123, '⚠️ Something broke');
+      expect(bot.telegram.sendMessage).toHaveBeenCalledWith(123, '⚠️ Something broke', undefined);
     });
   });
 

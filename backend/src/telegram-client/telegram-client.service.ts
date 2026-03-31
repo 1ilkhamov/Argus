@@ -474,7 +474,7 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Send message ───────────────────────────────────────────────────────
 
-  async sendMessage(chatId: string, text: string, replyTo?: number): Promise<number> {
+  async sendMessageDirect(chatId: string, text: string, replyTo?: number): Promise<number> {
     if (!this.client || !this.isConnected()) {
       throw new Error('Telegram client is not connected.');
     }
@@ -486,6 +486,10 @@ export class TelegramClientService implements OnModuleInit, OnModuleDestroy {
     });
 
     return result.id;
+  }
+
+  async sendMessage(chatId: string, text: string, replyTo?: number): Promise<number> {
+    return this.sendMessageDirect(chatId, text, replyTo);
   }
 
   // ─── Read messages ──────────────────────────────────────────────────────

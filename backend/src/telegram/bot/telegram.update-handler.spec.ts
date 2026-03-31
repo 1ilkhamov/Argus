@@ -101,6 +101,7 @@ function createMockPendingNotifyService(): any {
   return {
     setPending: jest.fn(),
     getPending: jest.fn().mockReturnValue(undefined),
+    getAwaitingReply: jest.fn().mockReturnValue(undefined),
     setAwaitingReply: jest.fn(),
     consumeAwaitingReply: jest.fn().mockReturnValue(undefined),
   };
@@ -195,9 +196,14 @@ describe('TelegramUpdateHandler', () => {
       expect(chatService.sendMessage).toHaveBeenCalledWith(
         undefined,
         'Hello agent',
-        { scopeKey: 'telegram:abc123' },
+        expect.objectContaining({ scopeKey: 'telegram:abc123' }),
       );
-      expect(messageSender.sendText).toHaveBeenCalledWith(bot, 200, 'Hello from assistant');
+      expect(messageSender.sendText).toHaveBeenCalledWith(
+        bot,
+        200,
+        'Hello from assistant',
+        expect.objectContaining({ actor: 'agent', origin: 'telegram_update_handler' }),
+      );
     });
 
     it('rejects unauthorized users', async () => {
@@ -217,7 +223,12 @@ describe('TelegramUpdateHandler', () => {
 
       await textHandler(ctx);
 
-      expect(messageSender.sendError).toHaveBeenCalledWith(bot, 200, 'Access denied.');
+      expect(messageSender.sendError).toHaveBeenCalledWith(
+        bot,
+        200,
+        'Access denied.',
+        expect.objectContaining({ actor: 'system', correlationId: 'bot:200:text:access-denied' }),
+      );
     });
 
     it('ignores empty text messages', async () => {
@@ -262,7 +273,7 @@ describe('TelegramUpdateHandler', () => {
       expect(chatService.sendMessage).toHaveBeenCalledWith(
         undefined,
         'Hello from voice',
-        { scopeKey: 'telegram:abc123' },
+        expect.objectContaining({ scopeKey: 'telegram:abc123' }),
       );
     });
 
@@ -285,8 +296,10 @@ describe('TelegramUpdateHandler', () => {
       await voiceCallback(ctx);
 
       expect(messageSender.sendError).toHaveBeenCalledWith(
-        bot, 200,
+        bot,
+        200,
         'Could not transcribe the voice message. Please try again or send text.',
+        expect.objectContaining({ actor: 'system', correlationId: 'bot:200:voice:transcribe-failed' }),
       );
       expect(chatService.sendMessage).not.toHaveBeenCalled();
     });
@@ -309,7 +322,12 @@ describe('TelegramUpdateHandler', () => {
       await newCallback(ctx);
 
       // Verify response was sent
-      expect(messageSender.sendHtml).toHaveBeenCalledWith(bot, 200, expect.stringContaining('Новый диалог'));
+      expect(messageSender.sendHtml).toHaveBeenCalledWith(
+        bot,
+        200,
+        expect.stringContaining('Новый диалог'),
+        expect.objectContaining({ actor: 'system', correlationId: 'bot:200:new' }),
+      );
     });
   });
 
@@ -331,10 +349,21 @@ describe('TelegramUpdateHandler', () => {
 
       await textHandler(ctx);
 
-      expect(messageSender.sendPlaceholder).toHaveBeenCalledWith(bot, 200);
+      expect(messageSender.sendPlaceholder).toHaveBeenCalledWith(
+        bot,
+        200,
+        '⏳',
+        expect.objectContaining({ actor: 'agent', audit: false, correlationId: 'bot:200:stream:placeholder' }),
+      );
       expect(chatService.streamMessage).toHaveBeenCalled();
       // Final edit with full content
-      expect(messageSender.editMessage).toHaveBeenCalledWith(bot, 200, 42, 'Hello world');
+      expect(messageSender.editMessage).toHaveBeenCalledWith(
+        bot,
+        200,
+        42,
+        'Hello world',
+        expect.objectContaining({ actor: 'agent', correlationId: 'bot:200:conversation:conv-1' }),
+      );
     });
 
     it('falls back to simple mode if placeholder fails', async () => {

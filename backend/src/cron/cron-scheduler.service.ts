@@ -2,7 +2,9 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 
 import { CronJobRepository } from './cron-job.repository';
-import type { CronJob, CreateCronJobParams } from './cron-job.types';
+import type { CronJob, CreateCronJobParams, UpdateCronJobParams } from './cron-job.types';
+import { CronJobRunRepository } from './cron-run.repository';
+import type { CronJobFireContext, CronJobRun, ListCronJobRunsParams } from './cron-run.types';
 
 /** How often the scheduler checks for due jobs (ms) */
 const TICK_INTERVAL_MS = 15_000;
@@ -23,10 +25,11 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
   private running = false;
 
   /** Callback invoked when a job fires. Set externally by the wiring module. */
-  private onJobFired?: (job: CronJob) => Promise<void>;
+  private onJobFired?: (job: CronJob, context: CronJobFireContext) => Promise<void>;
 
   constructor(
     private readonly repo: CronJobRepository,
+    private readonly runRepo: CronJobRunRepository,
     private readonly configService: ConfigService,
   ) {}
 
@@ -39,7 +42,7 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Register a handler for when jobs fire */
-  setJobHandler(handler: (job: CronJob) => Promise<void>): void {
+  setJobHandler(handler: (job: CronJob, context: CronJobFireContext) => Promise<void>): void {
     this.onJobFired = handler;
   }
 
@@ -57,8 +60,61 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
     return job;
   }
 
+  async getJob(id: string): Promise<CronJob | undefined> {
+    return this.repo.findById(id);
+  }
+
+  async updateJob(id: string, updates: UpdateCronJobParams): Promise<CronJob | undefined> {
+    const current = await this.repo.findById(id);
+    if (!current) return undefined;
+
+    const nextJob: CronJob = {
+      ...current,
+      name: updates.name ?? current.name,
+      task: updates.task ?? current.task,
+      scheduleType: updates.scheduleType ?? current.scheduleType,
+      schedule: updates.schedule ?? current.schedule,
+      enabled: updates.enabled ?? current.enabled,
+      maxRuns: updates.maxRuns ?? current.maxRuns,
+      notificationPolicy: updates.notificationPolicy ?? current.notificationPolicy,
+    };
+
+    const patch: UpdateCronJobParams & Partial<Pick<CronJob, 'nextRunAt'>> = { ...updates };
+
+    if (!nextJob.enabled) {
+      patch.nextRunAt = null;
+    } else if (nextJob.maxRuns > 0 && current.runCount >= nextJob.maxRuns) {
+      patch.enabled = false;
+      patch.nextRunAt = null;
+    } else if (
+      updates.scheduleType !== undefined ||
+      updates.schedule !== undefined ||
+      updates.enabled === true ||
+      current.nextRunAt === null
+    ) {
+      const nextRun = this.computeNextRun(nextJob);
+      if (!nextRun) {
+        throw new Error(`Invalid or unschedulable ${nextJob.scheduleType} schedule: ${nextJob.schedule}`);
+      }
+      patch.nextRunAt = nextRun;
+    }
+
+    await this.repo.update(id, patch);
+
+    return {
+      ...nextJob,
+      enabled: patch.enabled ?? nextJob.enabled,
+      nextRunAt: patch.nextRunAt ?? current.nextRunAt,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   async listJobs(): Promise<CronJob[]> {
     return this.repo.findAll();
+  }
+
+  async listRecentRuns(params: ListCronJobRunsParams = {}): Promise<CronJobRun[]> {
+    return this.runRepo.findRecent(params);
   }
 
   async deleteJob(id: string): Promise<boolean> {
@@ -68,19 +124,22 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
   async pauseJob(id: string): Promise<CronJob | undefined> {
     const job = await this.repo.findById(id);
     if (!job) return undefined;
-    await this.repo.update(id, { enabled: false });
-    return { ...job, enabled: false };
+    await this.repo.update(id, { enabled: false, nextRunAt: null });
+    return { ...job, enabled: false, nextRunAt: null, updatedAt: new Date().toISOString() };
   }
 
   async resumeJob(id: string): Promise<CronJob | undefined> {
     const job = await this.repo.findById(id);
     if (!job) return undefined;
+    if (job.maxRuns > 0 && job.runCount >= job.maxRuns) {
+      throw new Error(`Cannot resume job ${id}: max runs already reached.`);
+    }
     const nextRun = this.computeNextRun(job);
     if (!nextRun) {
       throw new Error(`Cannot resume job ${id}: schedule is invalid or has no future occurrence.`);
     }
     await this.repo.update(id, { enabled: true, nextRunAt: nextRun });
-    return { ...job, enabled: true, nextRunAt: nextRun };
+    return { ...job, enabled: true, nextRunAt: nextRun, updatedAt: new Date().toISOString() };
   }
 
   // ─── Scheduler loop ──────────────────────────────────────────────────────
@@ -131,8 +190,18 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
   private async fireJob(job: CronJob): Promise<void> {
     this.logger.log(`Firing cron job: "${job.name}" (${job.id})`);
 
+    const scheduledFor = job.nextRunAt;
     const now = new Date().toISOString();
     const newRunCount = job.runCount + 1;
+    const run = await this.runRepo.create({
+      jobId: job.id,
+      jobName: job.name,
+      scheduleType: job.scheduleType,
+      schedule: job.schedule,
+      attempt: newRunCount,
+      scheduledFor,
+      startedAt: now,
+    });
 
     // Check if max runs reached
     if (job.maxRuns > 0 && newRunCount >= job.maxRuns) {
@@ -155,12 +224,32 @@ export class CronSchedulerService implements OnModuleInit, OnModuleDestroy {
     // Fire the handler
     if (this.onJobFired) {
       try {
-        await this.onJobFired(job);
+        await this.onJobFired(job, {
+          runId: run.id,
+          attempt: newRunCount,
+          scheduledFor,
+          startedAt: now,
+        });
       } catch (err) {
-        this.logger.error(`Job handler failed for "${job.name}": ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        await this.runRepo.update(run.id, {
+          finishedAt: new Date().toISOString(),
+          status: 'failed',
+          resultStatus: 'failed',
+          notificationStatus: 'failed',
+          errorMessage: message,
+        });
+        this.logger.error(`Job handler failed for "${job.name}": ${message}`);
       }
     } else {
-      this.logger.warn(`No job handler registered — job "${job.name}" result dropped`);
+      await this.runRepo.update(run.id, {
+        finishedAt: new Date().toISOString(),
+        status: 'canceled',
+        resultStatus: 'canceled',
+        notificationStatus: 'skipped',
+        errorMessage: 'No job handler registered.',
+      });
+      this.logger.warn(`No job handler registered — job "${job.name}" canceled`);
     }
   }
 

@@ -2,7 +2,7 @@ import { ConsoleLogger, LogLevel } from '@nestjs/common';
 import { mkdirSync, appendFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-const LOG_DIR = resolve(process.cwd(), 'data', 'logs');
+export const LOG_DIR = resolve(process.cwd(), 'data', 'logs');
 
 function ensureLogDir(): void {
   if (!existsSync(LOG_DIR)) {

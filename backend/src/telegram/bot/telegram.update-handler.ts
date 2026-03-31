@@ -8,11 +8,11 @@ import { MemoryStoreService } from '../../memory/core/memory-store.service';
 import { ToolRegistryService } from '../../tools/core/registry/tool-registry.service';
 import { TelegramClientRepository } from '../../telegram-client/telegram-client.repository';
 import { TelegramClientMessagesRepository } from '../../telegram-client/telegram-client-messages.repository';
+import { TelegramClientWriteService } from '../../telegram-client/telegram-client-write.service';
 import { TelegramAuthService } from '../auth/telegram.auth.service';
-import { TelegramMessageSender } from './telegram.message-sender';
+import { TelegramMessageSender, type TelegramBotReplyMarkup, type TelegramBotSendOptions } from './telegram.message-sender';
 import { TelegramVoiceHandler } from '../voice/telegram.voice-handler';
-import { PendingNotifyService } from '../../tools/core/pending-notify.service';
-import { TelegramClientService } from '../../telegram-client/telegram-client.service';
+import { PendingNotifyService, type PendingNotify } from '../../tools/core/pending-notify.service';
 import type { ConversationMap, TelegramConfig, TelegramUserContext } from '../telegram.types';
 
 const BOT_COMMANDS = [
@@ -38,7 +38,7 @@ const MENU_KEYBOARD = {
       { text: '❓ Помощь', callback_data: 'cmd:help' },
     ],
   ],
-};
+} satisfies TelegramBotReplyMarkup;
 
 /**
  * Core handler for incoming Telegram updates.
@@ -63,7 +63,7 @@ export class TelegramUpdateHandler {
     private readonly clientRepository: TelegramClientRepository,
     private readonly clientMessagesRepository: TelegramClientMessagesRepository,
     private readonly pendingNotify: PendingNotifyService,
-    private readonly clientService: TelegramClientService,
+    private readonly clientWriteService: TelegramClientWriteService,
   ) {
     const config = this.configService.get<TelegramConfig>('telegram')!;
     this.progressiveEdit = config.progressiveEdit;
@@ -103,6 +103,19 @@ export class TelegramUpdateHandler {
     bot.on('text', (ctx) => this.handleText(bot, ctx));
   }
 
+  private buildBotSendOptions(
+    actor: 'system' | 'agent',
+    correlationId: string,
+    extra?: Omit<TelegramBotSendOptions, 'actor' | 'origin' | 'correlationId'>,
+  ): TelegramBotSendOptions {
+    return {
+      actor,
+      origin: 'telegram_update_handler',
+      correlationId,
+      ...extra,
+    };
+  }
+
   // ─── Command handlers ────────────────────────────────────────────────────
 
   private async handleStart(bot: Telegraf, ctx: { message: Update.New & Update.NonChannel & Message.TextMessage; chat: { id: number }; from?: { id: number; first_name?: string; username?: string } }): Promise<void> {
@@ -110,7 +123,12 @@ export class TelegramUpdateHandler {
     const chatId = ctx.chat.id;
 
     if (!userId || !this.authService.isAllowed(userId)) {
-      await this.messageSender.sendHtml(bot, chatId, '⛔ Access denied. Contact the administrator.');
+      await this.messageSender.sendHtml(
+        bot,
+        chatId,
+        '⛔ Access denied. Contact the administrator.',
+        this.buildBotSendOptions('system', `bot:${chatId}:start:access-denied`),
+      );
       return;
     }
 
@@ -118,24 +136,24 @@ export class TelegramUpdateHandler {
     const name = esc(ctx.from?.first_name || 'there');
     const html = `Привет, ${name}. Я <b>Argus</b> — твой AI-ассистент.\n\nОтправь сообщение текстом или голосом.\nНажми кнопку ниже или введи /menu.`;
 
-    await bot.telegram.sendMessage(chatId, html, {
-      parse_mode: 'HTML',
-      reply_markup: MENU_KEYBOARD,
-    }).catch(() => {
-      bot.telegram.sendMessage(chatId, `Привет, ${name}. Я Argus — твой AI-ассистент.\n\nОтправь сообщение или нажми /menu`, { reply_markup: MENU_KEYBOARD });
-    });
+    await this.messageSender.sendHtml(
+      bot,
+      chatId,
+      html,
+      this.buildBotSendOptions('system', `bot:${chatId}:start`, { replyMarkup: MENU_KEYBOARD }),
+    );
   }
 
   private async handleMenu(bot: Telegraf, ctx: { chat: { id: number }; from?: { id: number } }): Promise<void> {
     const userId = ctx.from?.id;
     if (!userId || !this.authService.isAllowed(userId)) return;
 
-    await bot.telegram.sendMessage(ctx.chat.id, '<b>Argus</b> — выбери действие:', {
-      parse_mode: 'HTML',
-      reply_markup: MENU_KEYBOARD,
-    }).catch(() => {
-      bot.telegram.sendMessage(ctx.chat.id, 'Argus — выбери действие:', { reply_markup: MENU_KEYBOARD });
-    });
+    await this.messageSender.sendHtml(
+      bot,
+      ctx.chat.id,
+      '<b>Argus</b> — выбери действие:',
+      this.buildBotSendOptions('system', `bot:${ctx.chat.id}:menu`, { replyMarkup: MENU_KEYBOARD }),
+    );
   }
 
   private async handleHelp(bot: Telegraf, ctx: { chat: { id: number }; from?: { id: number } }): Promise<void> {
@@ -155,7 +173,7 @@ export class TelegramUpdateHandler {
       'Просто напиши текст или отправь голосовое.',
     ].join('\n');
 
-    await this.messageSender.sendHtml(bot, ctx.chat.id, html);
+    await this.messageSender.sendHtml(bot, ctx.chat.id, html, this.buildBotSendOptions('system', `bot:${ctx.chat.id}:help`));
   }
 
   private async handleNewConversation(bot: Telegraf, ctx: { chat: { id: number }; from?: { id: number } }): Promise<void> {
@@ -165,7 +183,12 @@ export class TelegramUpdateHandler {
     if (!userId || !this.authService.isAllowed(userId)) return;
 
     this.conversations.delete(chatId);
-    await this.messageSender.sendHtml(bot, chatId, 'Контекст очищен. Новый диалог начат.');
+    await this.messageSender.sendHtml(
+      bot,
+      chatId,
+      'Контекст очищен. Новый диалог начат.',
+      this.buildBotSendOptions('system', `bot:${chatId}:new`),
+    );
 
     this.logger.debug(`New conversation for Telegram user ${userId} (chat ${chatId})`);
   }
@@ -197,7 +220,7 @@ export class TelegramUpdateHandler {
       '</pre>',
     ].join('\n');
 
-    await this.messageSender.sendHtml(bot, ctx.chat.id, html);
+    await this.messageSender.sendHtml(bot, ctx.chat.id, html, this.buildBotSendOptions('system', `bot:${ctx.chat.id}:status`));
   }
 
   private async handleMemory(bot: Telegraf, ctx: { chat: { id: number }; from?: { id: number } }): Promise<void> {
@@ -225,7 +248,7 @@ export class TelegramUpdateHandler {
       '</pre>',
     ].join('\n');
 
-    await this.messageSender.sendHtml(bot, ctx.chat.id, html);
+    await this.messageSender.sendHtml(bot, ctx.chat.id, html, this.buildBotSendOptions('system', `bot:${ctx.chat.id}:memory`));
   }
 
   private async handleTools(bot: Telegraf, ctx: { chat: { id: number }; from?: { id: number } }): Promise<void> {
@@ -259,12 +282,17 @@ export class TelegramUpdateHandler {
 
     lines.push('<code>●</code> безопасный  <code>◐</code> умеренный  <code>○</code> опасный');
 
-    await this.messageSender.sendHtml(bot, ctx.chat.id, lines.join('\n'));
+    await this.messageSender.sendHtml(
+      bot,
+      ctx.chat.id,
+      lines.join('\n'),
+      this.buildBotSendOptions('system', `bot:${ctx.chat.id}:tools`),
+    );
   }
 
   // ─── Callback query handler (inline keyboard) ───────────────────────────
 
-  private async handleCallback(bot: Telegraf, ctx: { callbackQuery?: { id: string; data?: string }; chat?: { id: number }; from?: { id: number } }): Promise<void> {
+  private async handleCallback(bot: Telegraf, ctx: { callbackQuery?: { id: string; data?: string; message?: { message_id?: number } }; chat?: { id: number }; from?: { id: number } }): Promise<void> {
     const query = ctx.callbackQuery;
     if (!query?.data || !ctx.chat || !ctx.from) return;
 
@@ -281,7 +309,7 @@ export class TelegramUpdateHandler {
 
     // Handle notify reply buttons: "notify_reply:{targetChatId}"
     if (query.data.startsWith('notify_reply:')) {
-      await this.handleNotifyReply(bot, chatId, query.data);
+      await this.handleNotifyReply(bot, chatId, query.data, query.message?.message_id);
       return;
     }
 
@@ -312,12 +340,16 @@ export class TelegramUpdateHandler {
    * Handle "Ответить" button press from a notify message.
    * Stores awaiting reply state so the next text message is routed to the target chat.
    */
-  private async handleNotifyReply(bot: Telegraf, botChatId: number, callbackData: string): Promise<void> {
+  private async handleNotifyReply(bot: Telegraf, botChatId: number, callbackData: string, sourceBotMessageId?: number): Promise<void> {
     const targetChatId = callbackData.slice('notify_reply:'.length);
     if (!targetChatId) return;
 
+    const pendingInfo = sourceBotMessageId !== undefined
+      ? this.pendingNotify.getPending(sourceBotMessageId)
+      : undefined;
+
     // Look up chat title from repository
-    let chatTitle = targetChatId;
+    let chatTitle = pendingInfo?.chatTitle ?? targetChatId;
     try {
       const chat = await this.clientRepository.findByChatId(targetChatId);
       if (chat) chatTitle = chat.chatTitle;
@@ -331,14 +363,16 @@ export class TelegramUpdateHandler {
     this.pendingNotify.setAwaitingReply(botChatId, {
       chatId: targetChatId,
       chatTitle,
-      question: '',
+      question: pendingInfo?.question ?? '',
       createdAt: Date.now(),
+      sourceBotMessageId: sourceBotMessageId ?? null,
     });
 
     await this.messageSender.sendHtml(
       bot,
       botChatId,
       `✏️ Напиши ответ для <b>${this.messageSender.escapeHtml(chatTitle)}</b>:`,
+      this.buildBotSendOptions('system', `bot:${botChatId}:notify-reply-prompt:${targetChatId}`),
     );
   }
 
@@ -347,7 +381,12 @@ export class TelegramUpdateHandler {
     const chatId = ctx.chat.id;
 
     if (!userId || !this.authService.isAllowed(userId)) {
-      await this.messageSender.sendError(bot, chatId, 'Access denied.');
+      await this.messageSender.sendError(
+        bot,
+        chatId,
+        'Access denied.',
+        this.buildBotSendOptions('system', `bot:${chatId}:text:access-denied`),
+      );
       return;
     }
 
@@ -355,9 +394,9 @@ export class TelegramUpdateHandler {
     if (!text) return;
 
     // Check if this is a reply to a pending notify → route directly to target chat
-    const pendingReply = this.pendingNotify.consumeAwaitingReply(chatId);
+    const pendingReply = this.pendingNotify.getAwaitingReply(chatId);
     if (pendingReply) {
-      await this.routeReplyToChat(bot, chatId, text, pendingReply.chatId, pendingReply.chatTitle);
+      await this.routeReplyToChat(bot, chatId, text, pendingReply);
       return;
     }
 
@@ -370,7 +409,12 @@ export class TelegramUpdateHandler {
     const chatId = ctx.chat.id;
 
     if (!userId || !this.authService.isAllowed(userId)) {
-      await this.messageSender.sendError(bot, chatId, 'Access denied.');
+      await this.messageSender.sendError(
+        bot,
+        chatId,
+        'Access denied.',
+        this.buildBotSendOptions('system', `bot:${chatId}:voice:access-denied`),
+      );
       return;
     }
 
@@ -383,7 +427,12 @@ export class TelegramUpdateHandler {
     const chatId = ctx.chat.id;
 
     if (!userId || !this.authService.isAllowed(userId)) {
-      await this.messageSender.sendError(bot, chatId, 'Access denied.');
+      await this.messageSender.sendError(
+        bot,
+        chatId,
+        'Access denied.',
+        this.buildBotSendOptions('system', `bot:${chatId}:audio:access-denied`),
+      );
       return;
     }
 
@@ -404,7 +453,12 @@ export class TelegramUpdateHandler {
     const transcribedText = await this.voiceHandler.transcribe(bot, fileId);
 
     if (!transcribedText) {
-      await this.messageSender.sendError(bot, chatId, 'Could not transcribe the voice message. Please try again or send text.');
+      await this.messageSender.sendError(
+        bot,
+        chatId,
+        'Could not transcribe the voice message. Please try again or send text.',
+        this.buildBotSendOptions('system', `bot:${chatId}:voice:transcribe-failed`),
+      );
       return;
     }
 
@@ -432,7 +486,12 @@ export class TelegramUpdateHandler {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Error processing message for chat ${chatId}: ${message}`);
-      await this.messageSender.sendError(bot, chatId, 'Something went wrong. Please try again.');
+      await this.messageSender.sendError(
+        bot,
+        chatId,
+        'Something went wrong. Please try again.',
+        this.buildBotSendOptions('system', `bot:${chatId}:process-error`),
+      );
     }
   }
 
@@ -460,7 +519,15 @@ export class TelegramUpdateHandler {
       );
 
       this.conversations.set(chatId, conversation.id);
-      await this.messageSender.sendText(bot, chatId, assistantMessage.content);
+      await this.messageSender.sendText(
+        bot,
+        chatId,
+        assistantMessage.content,
+        this.buildBotSendOptions('agent', `bot:${chatId}:conversation:${conversation.id}`, {
+          scopeKey,
+          conversationId: conversation.id,
+        }),
+      );
     } finally {
       clearInterval(typingInterval);
     }
@@ -476,7 +543,12 @@ export class TelegramUpdateHandler {
     content: string,
     scopeKey: string,
   ): Promise<void> {
-    const placeholderId = await this.messageSender.sendPlaceholder(bot, chatId);
+    const placeholderOptions = this.buildBotSendOptions('agent', `bot:${chatId}:stream:placeholder`, {
+      scopeKey,
+      conversationId,
+      audit: false,
+    });
+    const placeholderId = await this.messageSender.sendPlaceholder(bot, chatId, '⏳', placeholderOptions);
     if (!placeholderId) {
       // Fallback to simple mode
       return this.processMessageSimple(bot, chatId, conversationId, content, scopeKey);
@@ -504,7 +576,17 @@ export class TelegramUpdateHandler {
 
         const now = Date.now();
         if (!chunk.done && fullContent.length > 0 && now - lastEditTime >= this.editIntervalMs && fullContent !== lastEditContent) {
-          await this.messageSender.editMessage(bot, chatId, placeholderId, fullContent + ' ▍');
+          await this.messageSender.editMessage(
+            bot,
+            chatId,
+            placeholderId,
+            fullContent + ' ▍',
+            this.buildBotSendOptions('agent', `bot:${chatId}:stream:partial`, {
+              scopeKey,
+              conversationId: newConversationId,
+              audit: false,
+            }),
+          );
           lastEditContent = fullContent;
           lastEditTime = now;
         }
@@ -519,13 +601,26 @@ export class TelegramUpdateHandler {
 
     // Final edit with complete content
     if (fullContent) {
-      const edited = await this.messageSender.editMessage(bot, chatId, placeholderId, fullContent);
+      const finalOptions = this.buildBotSendOptions('agent', `bot:${chatId}:conversation:${newConversationId ?? conversationId ?? 'unknown'}`, {
+        scopeKey,
+        conversationId: newConversationId ?? conversationId,
+      });
+      const edited = await this.messageSender.editMessage(bot, chatId, placeholderId, fullContent, finalOptions);
       if (!edited) {
         // If edit failed (e.g., content too long), send as new messages
-        await this.messageSender.sendText(bot, chatId, fullContent);
+        await this.messageSender.sendText(bot, chatId, fullContent, finalOptions);
       }
     } else {
-      await this.messageSender.editMessage(bot, chatId, placeholderId, '(empty response)');
+      await this.messageSender.editMessage(
+        bot,
+        chatId,
+        placeholderId,
+        '(empty response)',
+        this.buildBotSendOptions('agent', `bot:${chatId}:conversation:${newConversationId ?? conversationId ?? 'unknown'}`, {
+          scopeKey,
+          conversationId: newConversationId ?? conversationId,
+        }),
+      );
     }
   }
 
@@ -539,21 +634,44 @@ export class TelegramUpdateHandler {
     bot: Telegraf,
     botChatId: number,
     text: string,
-    targetChatId: string,
-    targetChatTitle: string,
+    pendingReply: PendingNotify,
   ): Promise<void> {
+    const targetChatId = pendingReply.chatId;
+    const targetChatTitle = pendingReply.chatTitle;
+    const correlationId = `notify-reply:${targetChatId}:${botChatId}`;
+
     try {
-      await this.clientService.sendMessage(targetChatId, text);
+      await this.clientWriteService.sendMessage({
+        chatId: targetChatId,
+        chatTitle: targetChatTitle,
+        text,
+        actor: 'notify_reply',
+        origin: 'telegram_update_handler',
+        correlationId,
+      });
+      try {
+        this.pendingNotify.completeAwaitingReply(botChatId, text, correlationId);
+      } catch (historyError) {
+        this.logger.warn(
+          `Reply routed to ${targetChatId} but notify history update failed: ${historyError instanceof Error ? historyError.message : String(historyError)}`,
+        );
+      }
       await this.messageSender.sendHtml(
         bot,
         botChatId,
         `✅ Отправлено в <b>${this.messageSender.escapeHtml(targetChatTitle)}</b>`,
+        this.buildBotSendOptions('system', `bot:${botChatId}:notify-reply-confirm:${targetChatId}`),
       );
       this.logger.debug(`Routed reply to ${targetChatTitle} (${targetChatId}): "${text.slice(0, 80)}"`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Failed to route reply to ${targetChatId}: ${msg}`);
-      await this.messageSender.sendError(bot, botChatId, `Не удалось отправить: ${msg}`);
+      await this.messageSender.sendError(
+        bot,
+        botChatId,
+        `Не удалось отправить: ${msg}`,
+        this.buildBotSendOptions('system', `bot:${botChatId}:notify-reply-failed:${targetChatId}`),
+      );
     }
   }
 

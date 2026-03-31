@@ -71,7 +71,11 @@ export class HookExecutorService implements OnModuleInit {
       // Send notification if configured
       if (hook.notifyOnFire) {
         try {
-          await this.notifyTool.sendNotification(`🔔 ${hook.name}`, result);
+          await this.notifyTool.sendNotification(`🔔 ${hook.name}`, result, {
+            actor: 'system',
+            origin: 'hook_executor',
+            correlationId: hook.id,
+          });
         } catch (notifyErr) {
           this.logger.warn(
             `Notification failed for hook "${hook.name}": ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
@@ -100,6 +104,11 @@ export class HookExecutorService implements OnModuleInit {
           await this.notifyTool.sendNotification(
             `❌ ${hook.name}`,
             `Webhook processing failed: ${msg}`,
+            {
+              actor: 'system',
+              origin: 'hook_executor',
+              correlationId: hook.id,
+            },
           );
         } catch {
           // Notification itself failed
