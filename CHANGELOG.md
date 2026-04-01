@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-04-01
+
+### Added
+
+- Added missing localized tool description entries in `frontend/src/i18n/locales/ru.json` and `frontend/src/i18n/locales/en.json` so the tools catalog no longer shows untranslated metadata for the newly exposed built-in tools
+
+### Changed
+
+- Refined `frontend/src/components/ops/OpsConsoleV2.tsx` to use cleaner shared page surfaces for filters, forms, sections and cards, aligning the operations page more closely with the rest of the frontend shell
+- Improved operations page scanning UX with clearer status badges, more consistent block sizing and spacing, and a more readable outbound audit split-view
+- Updated the runtime tab badge logic to reflect the actual monitored chat/runtime footprint instead of only `runtimeStates.length`
+
 ## [0.2.1] - 2026-03-31
 
 ### Fixed

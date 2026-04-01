@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, BellRing, Clock3, FileText, Radio, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Activity, BellRing, Clock3, FileText, Radio, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { useShallow } from 'zustand/shallow';
 
 import {
@@ -23,7 +23,7 @@ import {
   type TelegramWatchRule,
   type TelegramWatchState,
 } from '@/api/resources/ops.api';
-import { PageDivider, PageEmpty, PageError, PageFooter, PageHeader, PageLoading, PageScrollArea, PageSearchBar, TabBar } from '@/components/common';
+import { PageDivider, PageEmpty, PageError, PageFooter, PageHeader, PageLoading, PageScrollArea, TabBar } from '@/components/common';
 import type { TabItem } from '@/components/common';
 import { useOpsStore } from '@/stores/ops/ops.store';
 import { useLangStore } from '@/stores/ui/lang.store';
@@ -33,9 +33,11 @@ type CronForm = { name: string; task: string; scheduleType: 'cron' | 'interval' 
 type MonitorForm = { monitoredChatId: string; name: string; thresholdSeconds: string };
 type ChatForm = { chatTitle: string; mode: TgChatMode; cooldownSeconds: string; systemNote: string };
 type Row = [string, string];
+type BadgeTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
 
-const inputStyle = { background: 'var(--panel-muted)', border: '1px solid var(--border-secondary)', color: 'var(--text-primary)' } as const;
-const chipStyle = { background: 'var(--panel-muted)', border: '1px solid var(--border-secondary)' } as const;
+const inputStyle = { background: 'var(--panel-muted)', border: '1px solid var(--border-secondary)', color: 'var(--text-primary)', width: '100%' } as const;
+const surfaceStyle = { background: 'var(--panel-surface)', border: '1px solid var(--border-secondary)' } as const;
+const mutedSurfaceStyle = { background: 'var(--panel-muted)', border: '1px solid var(--border-secondary)' } as const;
 const cronTypes: CronForm['scheduleType'][] = ['cron', 'interval', 'once'];
 const cronPolicies: CronJobNotificationPolicy[] = ['always', 'never'];
 const eventKinds: StructuredOperationalEventKind[] = ['cron_run', 'monitor_evaluation', 'monitor_alert', 'telegram_outbound', 'notify_route'];
@@ -51,13 +53,134 @@ const latest = (state?: { lastInboundAt: string | null; lastReplyAt: string | nu
 const cronForm = (job?: CronJob): CronForm => ({ name: job?.name ?? '', task: job?.task ?? '', scheduleType: job?.scheduleType ?? 'cron', schedule: job?.schedule ?? '', maxRuns: String(job?.maxRuns ?? 0), notificationPolicy: job?.notificationPolicy ?? 'always' });
 const monitorForm = (rule?: TelegramWatchRule): MonitorForm => ({ monitoredChatId: rule?.monitoredChatId ?? '', name: rule?.name ?? '', thresholdSeconds: String(rule?.thresholdSeconds ?? 900) });
 const chatForm = (chat?: { chatTitle: string; mode: TgChatMode; cooldownSeconds: number; systemNote: string }): ChatForm => ({ chatTitle: chat?.chatTitle ?? '', mode: chat?.mode ?? 'auto', cooldownSeconds: String(chat?.cooldownSeconds ?? 30), systemNote: chat?.systemNote ?? '' });
-function parseNonNegativeInteger(raw: string, label: string): number | undefined { if (!raw.trim()) return undefined; const value = Number(raw); if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer.`); return value; }
-function findValue(payload: Record<string, unknown> | null | undefined, ...keys: string[]): string | null { if (!payload) return null; for (const key of keys) { const value = payload[key]; if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value); } return null; }
-function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) { return <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>{title}</h3><span className="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase" style={chipStyle}>{count}</span></div>{children}</section>; }
-function Metric({ label, value }: { label: string; value: number }) { return <div className="rounded-xl px-3 py-2" style={{ background: 'var(--panel-muted)', border: '1px solid var(--border-secondary)' }}><div className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>{label}</div><div className="mt-1 text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>{value}</div></div>; }
-function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="flex min-w-0 flex-col gap-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}><span>{label}</span>{children}</label>; }
-function Card({ title, subtitle, rows, body, actions, selected = false }: { title: string; subtitle?: string; rows?: Row[]; body?: string | null; actions?: ReactNode; selected?: boolean }) { return <div className="rounded-2xl px-4 py-3" style={{ background: 'var(--panel-surface)', border: selected ? '1px solid var(--accent)' : '1px solid var(--border-secondary)' }}><div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</div>{subtitle ? <div className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{subtitle}</div> : null}{rows?.length ? <div className="mt-2 grid gap-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{rows.map(([label, value]) => <div key={`${title}-${label}`} className="flex gap-2"><span className="min-w-[142px]" style={{ color: 'var(--text-tertiary)' }}>{label}</span><span className="break-words">{value}</span></div>)}</div> : null}{body ? <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-[11px]" style={{ background: 'var(--panel-muted)', color: 'var(--text-secondary)' }}>{body}</pre> : null}{actions ? <div className="mt-3 flex flex-wrap gap-2">{actions}</div> : null}</div>; }
-function Button({ label, onClick, type = 'button', variant = 'primary' }: { label: string; onClick?: () => void; type?: 'button' | 'submit'; variant?: 'primary' | 'secondary' | 'danger' }) { const style = variant === 'danger' ? { background: 'var(--status-danger-soft)', color: 'var(--status-danger)' } : variant === 'secondary' ? { background: 'var(--panel-muted)', color: 'var(--text-primary)' } : { background: 'var(--accent-soft)', color: 'var(--accent)' }; return <button type={type} onClick={onClick} className="rounded-xl px-3 py-2 text-[12px] font-medium" style={style}>{label}</button>; }
+
+function parseNonNegativeInteger(raw: string, label: string): number | undefined {
+  if (!raw.trim()) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer.`);
+  return value;
+}
+
+function findValue(payload: Record<string, unknown> | null | undefined, ...keys: string[]): string | null {
+  if (!payload) return null;
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  }
+  return null;
+}
+
+function toneColor(tone: BadgeTone): { background: string; color: string; border: string } {
+  if (tone === 'accent') return { background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid transparent' };
+  if (tone === 'success') return { background: 'rgba(34, 197, 94, 0.12)', color: '#22c55e', border: '1px solid transparent' };
+  if (tone === 'warning') return { background: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b', border: '1px solid transparent' };
+  if (tone === 'danger') return { background: 'var(--status-danger-soft)', color: 'var(--status-danger)', border: '1px solid transparent' };
+  return { background: 'var(--panel-muted)', color: 'var(--text-tertiary)', border: '1px solid var(--border-secondary)' };
+}
+
+function statusTone(value: string | null | undefined): BadgeTone {
+  const normalized = String(value ?? '').toLowerCase();
+
+  if (!normalized || normalized === '—' || normalized === 'idle') return 'neutral';
+  if (normalized.includes('auto')) return 'accent';
+  if (normalized.includes('error') || normalized.includes('fail') || normalized.includes('blocked') || normalized.includes('deny') || normalized.includes('disabled') || normalized.includes('alerted')) return 'danger';
+  if (normalized.includes('warn') || normalized.includes('manual') || normalized.includes('pause') || normalized.includes('queued') || normalized.includes('processing') || normalized.includes('cooldown') || normalized.includes('unanswered') || normalized.includes('read_only')) return 'warning';
+  if (normalized.includes('success') || normalized.includes('sent') || normalized.includes('active') || normalized.includes('allow') || normalized.includes('resolve') || normalized.includes('notified')) return 'success';
+  return 'neutral';
+}
+
+function Badge({ label, tone = 'neutral' }: { label: string; tone?: BadgeTone }) {
+  const style = toneColor(tone);
+  return <span className="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={style}>{label}</span>;
+}
+
+function SearchField({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-2xl border px-3.5 py-2.5" style={mutedSurfaceStyle}>
+      <Search size={14} style={{ color: 'var(--text-tertiary)' }} />
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="min-w-0 flex-1 bg-transparent text-[12px] outline-none"
+        style={{ color: 'var(--text-primary)' }}
+      />
+    </div>
+  );
+}
+
+function Panel({ title, subtitle, actions, children }: { title?: string; subtitle?: string; actions?: ReactNode; children: ReactNode }) {
+  const hasHeader = Boolean(title || subtitle || actions);
+
+  return (
+    <div className="rounded-3xl border" style={surfaceStyle}>
+      {hasHeader ? (
+        <div className="flex flex-col gap-3 border-b px-4 py-4 md:flex-row md:items-start md:justify-between md:px-5" style={{ borderColor: 'var(--border-secondary)' }}>
+          <div className="min-w-0 flex-1">
+            {title ? <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</div> : null}
+            {subtitle ? <div className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{subtitle}</div> : null}
+          </div>
+          {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+        </div>
+      ) : null}
+      <div className="space-y-4 px-4 py-4 md:px-5">{children}</div>
+    </div>
+  );
+}
+
+function Section({ title, count, children, subtitle }: { title: string; count: number; children: ReactNode; subtitle?: string }) {
+  return <Panel title={title} subtitle={subtitle} actions={<Badge label={String(count)} />}>{children}</Panel>;
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-h-[82px] rounded-2xl border px-4 py-3" style={mutedSurfaceStyle}>
+      <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: 'var(--text-tertiary)' }}>{label}</div>
+      <div className="mt-2 text-[18px] font-semibold leading-none" style={{ color: 'var(--text-primary)' }}>{value}</div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="flex min-w-0 flex-col gap-1.5 text-[11px] font-medium" style={{ color: 'var(--text-tertiary)' }}><span>{label}</span>{children}</label>;
+}
+
+function Card({ title, subtitle, badges, rows, body, actions, selected = false }: { title: string; subtitle?: string; badges?: ReactNode; rows?: Row[]; body?: string | null; actions?: ReactNode; selected?: boolean }) {
+  return (
+    <div className="rounded-2xl border px-4 py-4 transition-shadow" style={{ background: 'var(--panel-surface)', borderColor: selected ? 'var(--accent)' : 'var(--border-secondary)', boxShadow: selected ? '0 0 0 1px var(--accent)' : 'none' }}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold leading-5" style={{ color: 'var(--text-primary)' }}>{title}</div>
+          {subtitle ? <div className="mt-1 text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>{subtitle}</div> : null}
+        </div>
+        {badges ? <div className="flex shrink-0 flex-wrap gap-1.5">{badges}</div> : null}
+      </div>
+      {rows?.length ? (
+        <div className="mt-3 grid gap-1.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+          {rows.map(([label, value]) => (
+            <div key={`${title}-${label}`} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
+              <span className="shrink-0 sm:min-w-[120px]" style={{ color: 'var(--text-tertiary)' }}>{label}</span>
+              <span className="min-w-0 break-words">{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {body ? <pre className="mt-3 whitespace-pre-wrap break-words rounded-xl px-3 py-2.5 text-[11px] leading-relaxed" style={{ background: 'var(--panel-muted)', color: 'var(--text-secondary)' }}>{body}</pre> : null}
+      {actions ? <div className="mt-3 flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: 'var(--border-secondary)' }}>{actions}</div> : null}
+    </div>
+  );
+}
+
+function Button({ label, onClick, type = 'button', variant = 'primary' }: { label: string; onClick?: () => void; type?: 'button' | 'submit'; variant?: 'primary' | 'secondary' | 'danger' }) {
+  const style = variant === 'danger'
+    ? { background: 'var(--status-danger-soft)', color: 'var(--status-danger)', border: '1px solid transparent' }
+    : variant === 'secondary'
+      ? { background: 'var(--panel-muted)', color: 'var(--text-primary)', border: '1px solid var(--border-secondary)' }
+      : { background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid transparent' };
+
+  return <button type={type} onClick={onClick} className="inline-flex items-center justify-center rounded-xl px-3.5 py-2 text-[12px] font-semibold transition-colors" style={style}>{label}</button>;
+}
 
 export function OpsConsole() {
   const { t } = useLangStore();
@@ -252,11 +375,12 @@ export function OpsConsole() {
   const watchStateByChat = useMemo(() => new Map<string, TelegramWatchState>(store.monitorStates.map((item) => [item.monitoredChatId, item])), [store.monitorStates]);
   const rulesByChat = useMemo(() => store.monitorRules.reduce((map, rule) => map.set(rule.monitoredChatId, [...(map.get(rule.monitoredChatId) ?? []), rule]), new Map<string, TelegramWatchRule[]>()), [store.monitorRules]);
   const selectedAuditEvent = useMemo(() => store.outboundAuditEvents.find((item) => item.id === selectedAuditId) ?? null, [selectedAuditId, store.outboundAuditEvents]);
+  const runtimeTabCount = useMemo(() => new Set([...store.monitoredChats.map((item) => item.id), ...store.runtimeStates.map((item) => item.monitoredChatId)]).size, [store.monitoredChats, store.runtimeStates]);
 
   const tabs: TabItem<OpsTab>[] = [
     { key: 'logs', label: t('ops.tabLogs'), icon: FileText, count: store.logs.length },
     { key: 'monitors', label: t('ops.tabMonitors'), icon: BellRing, count: store.monitorRules.length },
-    { key: 'runtime', label: t('ops.tabRuntime'), icon: Radio, count: store.runtimeStates.length },
+    { key: 'runtime', label: t('ops.tabRuntime'), icon: Radio, count: runtimeTabCount },
     { key: 'cron', label: t('ops.tabCron'), icon: Clock3, count: store.cronJobs.length },
     { key: 'notify', label: t('ops.tabNotify'), icon: BellRing, count: store.notifyRouting.pendingMessages.length + store.notifyRouting.awaitingReplies.length + store.notifyRouting.recentRoutes.length },
     { key: 'events', label: t('ops.tabEvents'), icon: Activity, count: store.operationalEvents.length },
@@ -401,9 +525,9 @@ export function OpsConsole() {
   const renderFilters = () => {
     if (tab === 'logs') {
       return (
-        <div className="space-y-3">
-          <PageSearchBar value={log.query} onChange={(query) => setLog((current) => ({ ...current, query }))} placeholder={t('ops.searchLogs')} />
-          <div className="grid grid-cols-1 gap-2 px-6 pb-1 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
+        <Panel>
+          <SearchField value={log.query} onChange={(query) => setLog((current) => ({ ...current, query }))} placeholder={t('ops.searchLogs')} />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
             <Field label={t('ops.level')}>
               <select value={log.level} onChange={(event) => setLog((current) => ({ ...current, level: event.target.value as '' | LogEntryLevel }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
                 <option value="">{t('ops.all')}</option>
@@ -449,31 +573,31 @@ export function OpsConsole() {
               <input type="datetime-local" value={log.before} onChange={(event) => setLog((current) => ({ ...current, before: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
             </Field>
           </div>
-        </div>
+        </Panel>
       );
     }
 
     if (tab === 'monitors') {
-      return <PageSearchBar value={monitorQuery} onChange={setMonitorQuery} placeholder={t('ops.monitorSearch')} />;
+      return <Panel><SearchField value={monitorQuery} onChange={setMonitorQuery} placeholder={t('ops.monitorSearch')} /></Panel>;
     }
 
     if (tab === 'runtime') {
-      return <PageSearchBar value={runtimeQuery} onChange={setRuntimeQuery} placeholder={t('ops.runtimeSearch')} />;
+      return <Panel><SearchField value={runtimeQuery} onChange={setRuntimeQuery} placeholder={t('ops.runtimeSearch')} /></Panel>;
     }
 
     if (tab === 'cron') {
-      return <PageSearchBar value={cronQuery} onChange={setCronQuery} placeholder={t('ops.cronSearch')} />;
+      return <Panel><SearchField value={cronQuery} onChange={setCronQuery} placeholder={t('ops.cronSearch')} /></Panel>;
     }
 
     if (tab === 'notify') {
-      return <PageSearchBar value={notifyQuery} onChange={setNotifyQuery} placeholder={t('ops.notifySearch')} />;
+      return <Panel><SearchField value={notifyQuery} onChange={setNotifyQuery} placeholder={t('ops.notifySearch')} /></Panel>;
     }
 
     if (tab === 'events') {
       return (
-        <div className="space-y-3">
-          <PageSearchBar value={events.query} onChange={(query) => setEvents((current) => ({ ...current, query }))} placeholder={t('ops.eventsSearch')} />
-          <div className="grid grid-cols-1 gap-2 px-6 pb-1 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
+        <Panel>
+          <SearchField value={events.query} onChange={(query) => setEvents((current) => ({ ...current, query }))} placeholder={t('ops.eventsSearch')} />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
             <Field label={t('ops.kind')}>
               <select value={events.kind} onChange={(event) => setEvents((current) => ({ ...current, kind: event.target.value as '' | StructuredOperationalEventKind }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
                 <option value="">{t('ops.all')}</option>
@@ -504,14 +628,14 @@ export function OpsConsole() {
               <input type="datetime-local" value={events.before} onChange={(event) => setEvents((current) => ({ ...current, before: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
             </Field>
           </div>
-        </div>
+        </Panel>
       );
     }
 
     return (
-      <div className="space-y-3">
-        <PageSearchBar value={audit.chatId} onChange={(chatId) => setAudit((current) => ({ ...current, chatId }))} placeholder={t('ops.auditSearch')} />
-        <div className="grid grid-cols-1 gap-2 px-6 pb-1 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
+      <Panel>
+        <SearchField value={audit.chatId} onChange={(chatId) => setAudit((current) => ({ ...current, chatId }))} placeholder={t('ops.auditSearch')} />
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
           <Field label={t('ops.actor')}>
             <select value={audit.actor} onChange={(event) => setAudit((current) => ({ ...current, actor: event.target.value as '' | OutboundAuditActor }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
               <option value="">{t('ops.all')}</option>
@@ -551,7 +675,7 @@ export function OpsConsole() {
             <input type="datetime-local" value={audit.before} onChange={(event) => setAudit((current) => ({ ...current, before: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
           </Field>
         </div>
-      </div>
+      </Panel>
     );
   };
 
@@ -560,27 +684,30 @@ export function OpsConsole() {
       return store.logs.length === 0 ? (
         <PageEmpty label={t('ops.noLogs')} />
       ) : (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Metric label={t('ops.entries')} value={store.logs.length} />
             <Metric label={t('ops.filesScanned')} value={store.logFilesScanned.length} />
             <Metric label={t('ops.events')} value={store.logs.filter((item) => item.event).length} />
             <Metric label={t('ops.errorLabel')} value={store.logs.filter((item) => item.level === 'error').length} />
           </div>
-          {store.logs.map((entry, index) => (
-            <Card
-              key={`${entry.file}-${entry.timestamp}-${index}`}
-              title={`${entry.file} · ${fmt(entry.timestamp)}`}
-              subtitle={entry.context ?? undefined}
-              rows={[
-                [t('ops.level'), entry.level],
-                [t('ops.event'), entry.event ?? '—'],
-                [t('ops.correlationId'), findValue(entry.payload, 'correlationId', 'correlation_id') ?? '—'],
-                [t('ops.chat'), findValue(entry.payload, 'chatId', 'chat_id', 'targetChatId', 'sourceChatId') ?? '—'],
-              ]}
-              body={mergeBody(entry.message, json(entry.payload))}
-            />
-          ))}
+          <Section title={t('ops.logsSummary')} count={store.logs.length}>
+            {store.logs.map((entry, index) => (
+              <Card
+                key={`${entry.file}-${entry.timestamp}-${index}`}
+                title={`${entry.file} · ${fmt(entry.timestamp)}`}
+                subtitle={entry.context ?? undefined}
+                badges={<>{<Badge label={entry.level} tone={statusTone(entry.level)} />}{entry.event ? <Badge label={entry.event} tone="accent" /> : null}</>}
+                rows={[
+                  [t('ops.level'), entry.level],
+                  [t('ops.event'), entry.event ?? '—'],
+                  [t('ops.correlationId'), findValue(entry.payload, 'correlationId', 'correlation_id') ?? '—'],
+                  [t('ops.chat'), findValue(entry.payload, 'chatId', 'chat_id', 'targetChatId', 'sourceChatId') ?? '—'],
+                ]}
+                body={mergeBody(entry.message, json(entry.payload))}
+              />
+            ))}
+          </Section>
         </div>
       );
     }
@@ -588,22 +715,24 @@ export function OpsConsole() {
     if (tab === 'monitors') {
       return (
         <div className="space-y-4">
-          <form onSubmit={(event) => void submitMonitor(event)} className="grid gap-3 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border-secondary)', background: 'var(--panel-surface)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-                {editingMonitorId ? t('ops.updateMonitorRule') : t('ops.createMonitorRule')}
+          <Panel title={editingMonitorId ? t('ops.updateMonitorRule') : t('ops.createMonitorRule')} actions={editingMonitorId ? <Button label={t('ops.cancelEdit')} onClick={cancelMonitorEdit} variant="secondary" /> : null}>
+            <form onSubmit={(event) => void submitMonitor(event)} className="space-y-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <Field label={t('ops.monitoredChatId')}>
+                  <input value={monitorDraft.monitoredChatId} onChange={(event) => setMonitorDraft((current) => ({ ...current, monitoredChatId: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
+                <Field label={t('ops.name')}>
+                  <input value={monitorDraft.name} onChange={(event) => setMonitorDraft((current) => ({ ...current, name: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
+                <Field label={t('ops.thresholdSeconds')}>
+                  <input value={monitorDraft.thresholdSeconds} onChange={(event) => setMonitorDraft((current) => ({ ...current, thresholdSeconds: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
               </div>
-              {editingMonitorId ? <Button label={t('ops.cancelEdit')} onClick={cancelMonitorEdit} variant="secondary" /> : null}
-            </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <input value={monitorDraft.monitoredChatId} onChange={(event) => setMonitorDraft((current) => ({ ...current, monitoredChatId: event.target.value }))} placeholder={t('ops.monitoredChatId')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-              <input value={monitorDraft.name} onChange={(event) => setMonitorDraft((current) => ({ ...current, name: event.target.value }))} placeholder={t('ops.name')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-              <input value={monitorDraft.thresholdSeconds} onChange={(event) => setMonitorDraft((current) => ({ ...current, thresholdSeconds: event.target.value }))} placeholder={t('ops.thresholdSeconds')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-            </div>
-            <div className="flex justify-end">
-              <Button type="submit" label={editingMonitorId ? t('ops.updateMonitorRule') : t('ops.createMonitorRule')} />
-            </div>
-          </form>
+              <div className="flex justify-end">
+                <Button type="submit" label={editingMonitorId ? t('ops.updateMonitorRule') : t('ops.createMonitorRule')} />
+              </div>
+            </form>
+          </Panel>
 
           <Section title={t('ops.sectionRules')} count={filteredMonitorRules.length}>
             {filteredMonitorRules.length === 0 ? (
@@ -614,6 +743,7 @@ export function OpsConsole() {
                   key={rule.id}
                   title={rule.name}
                   subtitle={rule.id}
+                  badges={<><Badge label={rule.enabled ? t('ops.active') : t('ops.paused')} tone={statusTone(rule.enabled ? 'active' : 'paused')} /><Badge label={`${rule.thresholdSeconds}s`} tone="accent" /></>}
                   rows={[
                     [t('ops.monitoredChatId'), rule.monitoredChatId],
                     [t('ops.thresholdSeconds'), String(rule.thresholdSeconds)],
@@ -635,6 +765,7 @@ export function OpsConsole() {
                   key={item.ruleId}
                   title={item.chatTitle ?? item.chatId ?? item.monitoredChatId}
                   subtitle={item.ruleId}
+                  badges={<Badge label={item.status} tone={statusTone(item.status)} />}
                   rows={[
                     [t('ops.status'), item.status],
                     [t('ops.lastInbound'), fmt(item.lastInboundAt)],
@@ -657,6 +788,7 @@ export function OpsConsole() {
                   key={item.id}
                   title={item.chatTitle ?? item.chatId ?? item.ruleId}
                   subtitle={item.ruleId}
+                  badges={<Badge label={item.evaluationStatus} tone={statusTone(item.evaluationStatus)} />}
                   rows={[
                     [t('ops.status'), item.evaluationStatus],
                     [t('ops.correlationId'), item.correlationId ?? '—'],
@@ -678,6 +810,7 @@ export function OpsConsole() {
                   key={`${item.evaluationId}-${item.ruleId}`}
                   title={item.chatTitle ?? item.chatId ?? item.ruleId}
                   subtitle={item.ruleId}
+                  badges={<Badge label={t('ops.alerts')} tone="danger" />}
                   rows={[
                     [t('ops.correlationId'), item.correlationId ?? '—'],
                     [t('ops.chat'), item.chatId ?? '—'],
@@ -696,25 +829,29 @@ export function OpsConsole() {
       return (
         <div className="space-y-4">
           {editingChatId ? (
-            <form onSubmit={(event) => void submitChat(event)} className="grid gap-3 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border-secondary)', background: 'var(--panel-surface)' }}>
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-                  {t('ops.updateMonitoredChat')}
+            <Panel title={t('ops.updateMonitoredChat')} actions={<Button label={t('ops.cancelEdit')} onClick={cancelChatEdit} variant="secondary" />}>
+              <form onSubmit={(event) => void submitChat(event)} className="space-y-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <Field label={t('ops.chatTitle')}>
+                    <input value={chatDraft.chatTitle} onChange={(event) => setChatDraft((current) => ({ ...current, chatTitle: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                  </Field>
+                  <Field label={t('ops.mode')}>
+                    <select value={chatDraft.mode} onChange={(event) => setChatDraft((current) => ({ ...current, mode: event.target.value as TgChatMode }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
+                      {TG_CHAT_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={t('ops.cooldown')}>
+                    <input value={chatDraft.cooldownSeconds} onChange={(event) => setChatDraft((current) => ({ ...current, cooldownSeconds: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                  </Field>
                 </div>
-                <Button label={t('ops.cancelEdit')} onClick={cancelChatEdit} variant="secondary" />
-              </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <input value={chatDraft.chatTitle} onChange={(event) => setChatDraft((current) => ({ ...current, chatTitle: event.target.value }))} placeholder={t('ops.chatTitle')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-                <select value={chatDraft.mode} onChange={(event) => setChatDraft((current) => ({ ...current, mode: event.target.value as TgChatMode }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
-                  {TG_CHAT_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-                </select>
-                <input value={chatDraft.cooldownSeconds} onChange={(event) => setChatDraft((current) => ({ ...current, cooldownSeconds: event.target.value }))} placeholder={t('ops.cooldown')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-              </div>
-              <textarea value={chatDraft.systemNote} onChange={(event) => setChatDraft((current) => ({ ...current, systemNote: event.target.value }))} rows={4} placeholder={t('ops.systemNote')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-              <div className="flex justify-end">
-                <Button type="submit" label={t('ops.updateMonitoredChat')} />
-              </div>
-            </form>
+                <Field label={t('ops.systemNote')}>
+                  <textarea value={chatDraft.systemNote} onChange={(event) => setChatDraft((current) => ({ ...current, systemNote: event.target.value }))} rows={4} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
+                <div className="flex justify-end">
+                  <Button type="submit" label={t('ops.updateMonitoredChat')} />
+                </div>
+              </form>
+            </Panel>
           ) : null}
 
           <Section title={t('ops.sectionMonitoredChats')} count={filteredMonitoredChats.length}>
@@ -731,6 +868,7 @@ export function OpsConsole() {
                     key={item.id}
                     title={item.chatTitle}
                     subtitle={item.chatId}
+                    badges={<><Badge label={item.mode} tone={statusTone(item.mode)} />{watchState ? <Badge label={watchState.status} tone={statusTone(watchState.status)} /> : null}</>}
                     rows={[
                       [t('ops.chatType'), item.chatType],
                       [t('ops.mode'), item.mode],
@@ -758,6 +896,7 @@ export function OpsConsole() {
                   key={item.monitoredChatId}
                   title={item.chatTitle}
                   subtitle={item.chatId}
+                  badges={<><Badge label={item.status} tone={statusTone(item.status)} /><Badge label={item.mode} tone={statusTone(item.mode)} /></>}
                   rows={[
                     [t('ops.status'), item.status],
                     [t('ops.queue'), `${item.queueLength}/${item.queueActive ? 'active' : 'idle'}`],
@@ -779,29 +918,37 @@ export function OpsConsole() {
     if (tab === 'cron') {
       return (
         <div className="space-y-4">
-          <form onSubmit={(event) => void submitCron(event)} className="grid gap-3 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border-secondary)', background: 'var(--panel-surface)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-                {editingCronId ? t('ops.updateCronJob') : t('ops.createCronJob')}
+          <Panel title={editingCronId ? t('ops.updateCronJob') : t('ops.createCronJob')} actions={editingCronId ? <Button label={t('ops.cancelEdit')} onClick={cancelCronEdit} variant="secondary" /> : null}>
+            <form onSubmit={(event) => void submitCron(event)} className="space-y-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label={t('ops.name')}>
+                  <input value={cronDraft.name} onChange={(event) => setCronDraft((current) => ({ ...current, name: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
+                <Field label={t('ops.scheduleType')}>
+                  <select value={cronDraft.scheduleType} onChange={(event) => setCronDraft((current) => ({ ...current, scheduleType: event.target.value as CronForm['scheduleType'] }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
+                    {cronTypes.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </Field>
+                <Field label={t('ops.schedule')}>
+                  <input value={cronDraft.schedule} onChange={(event) => setCronDraft((current) => ({ ...current, schedule: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
+                <Field label={t('ops.maxRuns')}>
+                  <input value={cronDraft.maxRuns} onChange={(event) => setCronDraft((current) => ({ ...current, maxRuns: event.target.value }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
+                <Field label={t('ops.notificationPolicy')}>
+                  <select value={cronDraft.notificationPolicy} onChange={(event) => setCronDraft((current) => ({ ...current, notificationPolicy: event.target.value as CronJobNotificationPolicy }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
+                    {cronPolicies.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </Field>
+                <Field label={t('ops.task')}>
+                  <textarea value={cronDraft.task} onChange={(event) => setCronDraft((current) => ({ ...current, task: event.target.value }))} rows={4} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
+                </Field>
               </div>
-              {editingCronId ? <Button label={t('ops.cancelEdit')} onClick={cancelCronEdit} variant="secondary" /> : null}
-            </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <input value={cronDraft.name} onChange={(event) => setCronDraft((current) => ({ ...current, name: event.target.value }))} placeholder={t('ops.name')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-              <select value={cronDraft.scheduleType} onChange={(event) => setCronDraft((current) => ({ ...current, scheduleType: event.target.value as CronForm['scheduleType'] }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
-                {cronTypes.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
-              <input value={cronDraft.schedule} onChange={(event) => setCronDraft((current) => ({ ...current, schedule: event.target.value }))} placeholder={t('ops.schedule')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-              <input value={cronDraft.maxRuns} onChange={(event) => setCronDraft((current) => ({ ...current, maxRuns: event.target.value }))} placeholder={t('ops.maxRuns')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-              <select value={cronDraft.notificationPolicy} onChange={(event) => setCronDraft((current) => ({ ...current, notificationPolicy: event.target.value as CronJobNotificationPolicy }))} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle}>
-                {cronPolicies.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
-              <textarea value={cronDraft.task} onChange={(event) => setCronDraft((current) => ({ ...current, task: event.target.value }))} rows={4} placeholder={t('ops.task')} className="rounded-xl px-3 py-2 text-[12px]" style={inputStyle} />
-            </div>
-            <div className="flex justify-end">
-              <Button type="submit" label={editingCronId ? t('ops.updateCronJob') : t('ops.createCronJob')} />
-            </div>
-          </form>
+              <div className="flex justify-end">
+                <Button type="submit" label={editingCronId ? t('ops.updateCronJob') : t('ops.createCronJob')} />
+              </div>
+            </form>
+          </Panel>
 
           <Section title={t('ops.sectionJobs')} count={filteredCronJobs.length}>
             {filteredCronJobs.length === 0 ? (
@@ -812,6 +959,7 @@ export function OpsConsole() {
                   key={job.id}
                   title={job.name}
                   subtitle={job.id}
+                  badges={<><Badge label={job.enabled ? t('ops.active') : t('ops.paused')} tone={statusTone(job.enabled ? 'active' : 'paused')} /><Badge label={job.scheduleType} tone="accent" /></>}
                   rows={[
                     [t('ops.schedule'), `${job.scheduleType} · ${job.schedule}`],
                     [t('ops.status'), job.enabled ? t('ops.active') : t('ops.paused')],
@@ -835,6 +983,7 @@ export function OpsConsole() {
                   key={run.id}
                   title={run.jobName}
                   subtitle={run.id}
+                  badges={<><Badge label={run.status} tone={statusTone(run.status)} /><Badge label={run.resultStatus} tone={statusTone(run.resultStatus)} /></>}
                   rows={[
                     [t('ops.status'), run.status],
                     [t('ops.result'), run.resultStatus],
@@ -880,7 +1029,7 @@ export function OpsConsole() {
               <PageEmpty label={t('ops.noNotifyRouting')} />
             ) : (
               filteredNotifyRoutes.map((item) => (
-                <Card key={item.id} title={item.chatTitle} subtitle={item.id} rows={[[t('ops.status'), item.routeStatus], [t('ops.correlationId'), item.correlationId ?? '—'], [t('ops.createdAt'), fmt(item.createdAt)], [t('ops.completedAt'), fmt(item.completedAt)]]} body={`${item.question}${item.replyText ? `\n\n${item.replyText}` : ''}`} />
+                <Card key={item.id} title={item.chatTitle} subtitle={item.id} badges={<Badge label={item.routeStatus} tone={statusTone(item.routeStatus)} />} rows={[[t('ops.status'), item.routeStatus], [t('ops.correlationId'), item.correlationId ?? '—'], [t('ops.createdAt'), fmt(item.createdAt)], [t('ops.completedAt'), fmt(item.completedAt)]]} body={`${item.question}${item.replyText ? `\n\n${item.replyText}` : ''}`} />
               ))
             )}
           </Section>
@@ -892,12 +1041,13 @@ export function OpsConsole() {
       return filteredOperationalEvents.length === 0 ? (
         <PageEmpty label={t('ops.noEvents')} />
       ) : (
-        <div className="space-y-3">
+        <Section title={t('ops.tabEvents')} count={filteredOperationalEvents.length}>
           {filteredOperationalEvents.map((item) => (
             <Card
               key={item.id}
               title={item.title}
               subtitle={`${item.kind} · ${fmt(item.timestamp)}`}
+              badges={<><Badge label={item.status} tone={statusTone(item.status)} /><Badge label={item.kind} tone="accent" /></>}
               rows={[
                 [t('ops.status'), item.status],
                 [t('ops.source'), item.source],
@@ -909,7 +1059,7 @@ export function OpsConsole() {
               body={mergeBody(item.summary, json(item.payload))}
             />
           ))}
-        </div>
+        </Section>
       );
     }
 
@@ -917,13 +1067,14 @@ export function OpsConsole() {
       <PageEmpty label={t('ops.noAudit')} />
     ) : (
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-        <div className="space-y-3">
+        <Section title={t('ops.tabAudit')} count={store.outboundAuditEvents.length}>
           {store.outboundAuditEvents.map((item) => (
-            <button key={item.id} type="button" onClick={() => setSelectedAuditId(item.id)} className="w-full text-left">
+            <button key={item.id} type="button" onClick={() => setSelectedAuditId(item.id)} className="w-full text-left focus:outline-none">
               <Card
                 selected={item.id === selectedAuditId}
                 title={item.targetChatTitle ?? item.targetChatId ?? item.id}
                 subtitle={`${item.channel} · ${fmt(item.createdAt)}`}
+                badges={<><Badge label={item.result} tone={statusTone(item.result)} /><Badge label={item.actor} /></>}
                 rows={[
                   [t('ops.actor'), item.actor],
                   [t('ops.origin'), item.origin],
@@ -936,13 +1087,14 @@ export function OpsConsole() {
               />
             </button>
           ))}
-        </div>
+        </Section>
 
-        <div className="space-y-3">
+        <div className="xl:sticky xl:top-0">
           {selectedAuditEvent ? (
             <Card
               title={t('ops.auditDetails')}
               subtitle={selectedAuditEvent.id}
+              badges={<><Badge label={selectedAuditEvent.result} tone={statusTone(selectedAuditEvent.result)} /><Badge label={selectedAuditEvent.policyDecision} tone={statusTone(selectedAuditEvent.policyDecision)} /></>}
               rows={[
                 [t('ops.target'), selectedAuditEvent.targetChatTitle ?? selectedAuditEvent.targetChatId ?? '—'],
                 [t('ops.chat'), selectedAuditEvent.targetChatId ?? '—'],
@@ -960,7 +1112,9 @@ export function OpsConsole() {
               body={mergeBody(selectedAuditEvent.errorMessage, selectedAuditEvent.payloadPreview)}
             />
           ) : (
-            <PageEmpty label={t('ops.noAudit')} />
+            <Panel title={t('ops.auditDetails')}>
+              <PageEmpty label={t('ops.noAudit')} />
+            </Panel>
           )}
         </div>
       </div>
@@ -973,14 +1127,14 @@ export function OpsConsole() {
         icon={Activity}
         title={t('ops.title')}
         subtitle={store.lastUpdatedAt ? `${t('ops.updated')}: ${fmt(store.lastUpdatedAt)}` : t('ops.subtitle')}
-        actions={<button type="button" onClick={() => void refresh()} disabled={store.isLoading} className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium disabled:opacity-60" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><RefreshCw className={store.isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />{t('ops.refresh')}</button>}
+        actions={<button type="button" onClick={() => void refresh()} disabled={store.isLoading} className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-medium disabled:opacity-60" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><RefreshCw className={store.isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />{t('ops.refresh')}</button>}
       />
       <TabBar tabs={tabs} activeTab={tab} onChange={setTab} variant="pill" />
-      {renderFilters()}
+      <div className="px-6 pb-3">{renderFilters()}</div>
       <PageDivider />
       {(store.error || localError) ? <PageError message={localError ?? store.error ?? ''} onDismiss={clearErrors} dismissLabel={t('common.dismiss')} /> : null}
       <PageScrollArea>
-        <div className="space-y-4">
+        <div className="space-y-5">
           {store.isLoading && !hasTabData ? <PageLoading label={t('common.loading')} /> : renderContent()}
         </div>
       </PageScrollArea>
