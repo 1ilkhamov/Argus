@@ -19,11 +19,16 @@ export class TokenEstimatorService {
         .filter((token) => token.length >= 12).length / 10,
     );
 
+    const characters = Array.from(content);
     const bulletPenalty = Math.ceil((content.match(/^\s*(?:[-*]|\d+[.)])\s+/gm) ?? []).length * 1.5);
     const codeFencePenalty = (content.match(/```/g) ?? []).length * 6;
     const quotedLinePenalty = Math.ceil((content.match(/^\s*>/gm) ?? []).length * 1.5);
-    const jsonLikePenalty = Math.ceil((content.match(/[{}\[\]"]/g) ?? []).length / 5);
-    const nonAsciiPenalty = Math.ceil((content.match(/[^\x00-\x7F]/g) ?? []).length / 12);
+    const jsonLikePenalty = Math.ceil(
+      characters.filter((char) => char === '{' || char === '}' || char === '[' || char === ']' || char === '"').length / 5,
+    );
+    const nonAsciiPenalty = Math.ceil(
+      characters.filter((char) => (char.codePointAt(0) ?? 0) > 0x7f).length / 12,
+    );
     const subtotal =
       base +
       newlinePenalty +
