@@ -62,6 +62,7 @@ export const API_ENDPOINTS = {
     telegramClientRuntime: '/telegram-client/runtime',
     notifyRouting: '/notify-routing',
     events: '/ops/events',
+    diagnostics: '/ops/diagnostics',
   },
   tools: {
     list: '/tools',

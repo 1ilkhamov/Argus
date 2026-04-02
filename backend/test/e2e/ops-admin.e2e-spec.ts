@@ -6,11 +6,16 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import * as request from 'supertest';
 
+import { DEFAULT_AGENT_USER_PROFILE } from '../../src/agent/profile/user-profile.types';
+import { ConversationExecutionStateService } from '../../src/chat/runtime/conversation-execution-state.service';
 import { CronJobRunRepository } from '../../src/cron/cron-run.repository';
 import { CronSchedulerService } from '../../src/cron/cron-scheduler.service';
 import { LOG_DIR } from '../../src/common/logger/file-logger.service';
 import { LlmService } from '../../src/llm/llm.service';
+import { MemoryService } from '../../src/memory/memory.service';
 import { MonitorRepository } from '../../src/monitors/monitor.repository';
+import { TurnResolutionDiagnosticsService } from '../../src/chat/runtime/turn-resolution-diagnostics.service';
+import { TelegramClientMonitorRuntimeService } from '../../src/telegram-client/telegram-client-monitor-runtime.service';
 import { TelegramClientRepository } from '../../src/telegram-client/telegram-client.repository';
 import { TelegramOutboundAuditRepository } from '../../src/telegram-runtime/telegram-outbound-audit.repository';
 import { PendingNotifyService } from '../../src/tools/core/pending-notify.service';
@@ -29,8 +34,12 @@ describe('Ops admin surfaces (e2e)', () => {
   let cronScheduler: CronSchedulerService;
   let monitorRepository: MonitorRepository;
   let monitoredChatRepository: TelegramClientRepository;
+  let telegramClientMonitorRuntimeService: TelegramClientMonitorRuntimeService;
   let outboundAuditRepository: TelegramOutboundAuditRepository;
   let pendingNotifyService: PendingNotifyService;
+  let memoryService: MemoryService;
+  let executionStateService: ConversationExecutionStateService;
+  let turnResolutionDiagnosticsService: TurnResolutionDiagnosticsService;
   const logFile = 'app-2099-12-31.log';
   const logPath = join(LOG_DIR, logFile);
 
@@ -66,6 +75,7 @@ describe('Ops admin surfaces (e2e)', () => {
     process.env.LLM_API_BASE = 'http://localhost:8317/v1';
     process.env.CORS_ORIGIN = 'http://localhost:2101';
     process.env.MEMORY_QDRANT_URL = '';
+    process.env.TELEGRAM_ENABLED = 'false';
 
     if (!existsSync(LOG_DIR)) {
       mkdirSync(LOG_DIR, { recursive: true });
@@ -96,6 +106,14 @@ describe('Ops admin surfaces (e2e)', () => {
           model: 'test-model',
           responseTimeMs: 1,
         }),
+        getRuntimeProfile: () => ({
+          provider: 'openai',
+          model: 'test-model',
+          maxCompletionTokens: 4096,
+          contextWindowTokens: 128000,
+          completionTimeoutMs: 120000,
+          streamTimeoutMs: 120000,
+        }),
       })
       .compile();
 
@@ -114,8 +132,12 @@ describe('Ops admin surfaces (e2e)', () => {
     cronScheduler = app.get(CronSchedulerService);
     monitorRepository = app.get(MonitorRepository);
     monitoredChatRepository = app.get(TelegramClientRepository);
+    telegramClientMonitorRuntimeService = app.get(TelegramClientMonitorRuntimeService);
     outboundAuditRepository = app.get(TelegramOutboundAuditRepository);
     pendingNotifyService = app.get(PendingNotifyService);
+    memoryService = app.get(MemoryService);
+    executionStateService = app.get(ConversationExecutionStateService);
+    turnResolutionDiagnosticsService = app.get(TurnResolutionDiagnosticsService);
   });
 
   afterAll(async () => {
@@ -339,6 +361,253 @@ describe('Ops admin surfaces (e2e)', () => {
           routeStatus: 'sent',
           replyText: 'Done.',
           correlationId: 'notify-reply:e2e',
+        }),
+      ]),
+    );
+  });
+
+  it('returns unified diagnostics through the admin API', async () => {
+    const scopeKey = 'ops:e2e';
+    const conversationId = 'conv-ops-1';
+    const userMessageId = 'msg-ops-1';
+    const observedAt = new Date('2099-12-31T10:30:00.000Z').toISOString();
+    const monitoredChat = await monitoredChatRepository.create({
+      chatId: '-100777',
+      chatTitle: 'Unified Diagnostics Chat',
+      chatType: 'group',
+      mode: 'auto',
+      cooldownSeconds: 45,
+      systemNote: 'Unified runtime source test',
+    });
+    await telegramClientMonitorRuntimeService.recordProcessing({
+      monitoredChat,
+      queueLength: 1,
+      conversationId,
+      observedAt,
+    });
+
+    await memoryService.saveManagedMemoryState({
+      scopeKey,
+      interactionPreferences: DEFAULT_AGENT_USER_PROFILE,
+      userFacts: [
+        {
+          key: 'project',
+          value: 'Argus 0.2.3',
+          source: 'explicit_user_statement',
+          confidence: 0.98,
+          pinned: true,
+          updatedAt: observedAt,
+        },
+      ],
+      episodicMemories: [
+        {
+          id: 'episode-ops-1',
+          kind: 'goal',
+          summary: 'Ship unified ops diagnostics',
+          source: 'explicit_user_statement',
+          salience: 0.91,
+          pinned: true,
+          updatedAt: observedAt,
+        },
+      ],
+      expectedVersion: 0,
+      lastProcessedUserMessage: {
+        conversationId,
+        messageId: userMessageId,
+        createdAt: observedAt,
+      },
+    });
+
+    turnResolutionDiagnosticsService.record({
+      timestamp: observedAt,
+      conversationId,
+      scopeKey,
+      mode: 'assistant',
+      modeSource: 'explicit',
+      executionMode: 'staged',
+      executionReasons: ['long_turn', 'budget_pressure_high'],
+      counts: {
+        userFacts: 1,
+        episodicMemories: 1,
+        recalledMemories: 0,
+        archiveEvidence: 0,
+        identityTraits: 3,
+      },
+      soulSource: 'data/soul.yml',
+      prompt: {
+        provider: 'openai',
+        model: 'test-model',
+        maxContextTokens: 128000,
+        reservedCompletionTokens: 4096,
+        reservedRetryTokens: 1024,
+        reservedToolRoundTokens: 768,
+        reservedStructuredFinishTokens: 256,
+        availablePromptTokens: 121856,
+        estimatedInputTokens: 1200,
+        finalInputTokens: 1400,
+        trimmedSectionIds: ['archive'],
+        trimmedHistoryCount: 2,
+        compressedSectionIds: ['recalled_memory'],
+        budgetPressure: 'high',
+        systemSectionCount: 6,
+        historyMessageCount: 14,
+      },
+      checkpoint: {
+        active: true,
+        resumed: false,
+        phase: 'plan',
+      },
+      memoryGrounding: {
+        isMemoryQuestion: false,
+        evidenceStrength: 'structured',
+        uncertaintyFirst: true,
+      },
+    });
+
+    await executionStateService.saveCheckpoint({
+      conversationId,
+      scopeKey,
+      userMessageId,
+      mode: 'staged',
+      phase: 'plan',
+      workingSummary: 'Assembling diagnostics response',
+      remainingSteps: ['summarize runtime state', 'emit response'],
+      budget: {
+        provider: 'openai',
+        model: 'test-model',
+        maxContextTokens: 128000,
+        reservedCompletionTokens: 4096,
+        reservedRetryTokens: 1024,
+        reservedToolRoundTokens: 768,
+        reservedStructuredFinishTokens: 256,
+        availablePromptTokens: 121856,
+        estimatedInputTokens: 1200,
+        finalInputTokens: 1400,
+        trimmedSectionIds: ['archive'],
+        trimmedHistoryCount: 2,
+        compressedSectionIds: ['recalled_memory'],
+        budgetPressure: 'high',
+      },
+      expiresAt: new Date('2099-12-31T22:30:00.000Z').toISOString(),
+    });
+
+    const response = await adminGet(`/api/ops/diagnostics?scopeKey=${encodeURIComponent(scopeKey)}`, '10.0.1.10').expect(200);
+
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        timestamp: expect.any(String),
+        llm: expect.objectContaining({
+          provider: 'openai',
+          model: 'test-model',
+        }),
+        startup: expect.objectContaining({
+          telegram: expect.objectContaining({
+            enabled: false,
+            tokenConfigured: false,
+            tokenSource: 'none',
+            running: false,
+          }),
+          applescript: expect.objectContaining({
+            platform: expect.any(String),
+            supported: expect.any(Boolean),
+            enabled: expect.any(Boolean),
+            registered: expect.any(Boolean),
+            status: expect.any(String),
+          }),
+        }),
+        memory: expect.objectContaining({
+          scopeKey,
+          interactionPreferencesConfigured: true,
+          processingState: expect.objectContaining({
+            lastProcessedUserMessageId: userMessageId,
+          }),
+          userFacts: {
+            total: 1,
+            pinned: 1,
+          },
+          episodicMemories: {
+            total: 1,
+            pinned: 1,
+          },
+        }),
+        telegramClient: expect.objectContaining({
+          monitoredChats: expect.arrayContaining([
+            expect.objectContaining({
+              id: monitoredChat.id,
+              chatId: monitoredChat.chatId,
+              mode: 'auto',
+            }),
+          ]),
+          runtimeStates: expect.arrayContaining([
+            expect.objectContaining({
+              monitoredChatId: monitoredChat.id,
+              chatId: monitoredChat.chatId,
+              status: 'processing',
+              queueLength: 1,
+            }),
+          ]),
+        }),
+        continuation: expect.objectContaining({
+          activeCount: 1,
+        }),
+        qdrant: expect.objectContaining({
+          configured: false,
+          ready: false,
+          circuitOpen: false,
+          consecutiveFailures: 0,
+        }),
+      }),
+    );
+    expect(response.body.memory.processingState.version).toBeGreaterThan(0);
+    expect(response.body.prompt.latest).toEqual(
+      expect.objectContaining({
+        conversationId,
+        scopeKey,
+        executionMode: 'staged',
+        executionReasons: ['long_turn', 'budget_pressure_high'],
+        checkpoint: expect.objectContaining({
+          active: true,
+          phase: 'plan',
+        }),
+        prompt: expect.objectContaining({
+          budgetPressure: 'high',
+          reservedToolRoundTokens: 768,
+          reservedStructuredFinishTokens: 256,
+          availablePromptTokens: 121856,
+          trimmedHistoryCount: 2,
+          trimmedSectionIds: ['archive'],
+          compressedSectionIds: ['recalled_memory'],
+        }),
+      }),
+    );
+    expect(response.body.continuation.active).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          conversationId,
+          scopeKey,
+          userMessageId,
+          phase: 'plan',
+          status: 'active',
+          budgetPressure: 'high',
+        }),
+      ]),
+    );
+    expect(response.body.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'prompt_budget_high',
+          subject: 'prompt',
+          severity: 'warning',
+        }),
+        expect.objectContaining({
+          code: 'prompt_trimming_active',
+          subject: 'prompt',
+          severity: 'info',
+        }),
+        expect.objectContaining({
+          code: 'active_continuations_present',
+          subject: 'continuation',
+          severity: 'info',
         }),
       ]),
     );

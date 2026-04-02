@@ -210,6 +210,7 @@ export function OpsConsole() {
     monitorEvaluations: state.monitorEvaluations,
     monitorAlerts: state.monitorAlerts,
     runtimeStates: state.runtimeStates,
+    diagnostics: state.diagnostics,
     cronJobs: state.cronJobs,
     cronRuns: state.cronRuns,
     outboundAuditEvents: state.outboundAuditEvents,
@@ -371,11 +372,13 @@ export function OpsConsole() {
   const filteredAwaitingReplies = useMemo(() => store.notifyRouting.awaitingReplies.filter((item) => hit(nq, item.botChatId, item.sourceBotMessageId, item.chatId, item.chatTitle, item.question)), [nq, store.notifyRouting.awaitingReplies]);
   const filteredNotifyRoutes = useMemo(() => store.notifyRouting.recentRoutes.filter((item) => hit(nq, item.id, item.chatId, item.chatTitle, item.replyText, item.routeStatus, item.correlationId)), [nq, store.notifyRouting.recentRoutes]);
   const filteredOperationalEvents = useMemo(() => store.operationalEvents.filter((item) => hit(eq, item.id, item.kind, item.status, item.source, item.title, item.summary, item.correlationId, item.chatId, item.chatTitle, item.jobId, item.jobName, item.ruleId)), [eq, store.operationalEvents]);
+  const filteredDiagnosticsWarnings = useMemo(() => (store.diagnostics?.warnings ?? []).filter((item) => hit(rq, item.code, item.subject, item.message, item.action)), [rq, store.diagnostics]);
+  const filteredContinuations = useMemo(() => (store.diagnostics?.continuation.active ?? []).filter((item) => hit(rq, item.conversationId, item.scopeKey, item.userMessageId, item.phase, item.status, item.lastErrorCode)), [rq, store.diagnostics]);
   const runtimeByChat = useMemo(() => new Map(store.runtimeStates.map((item) => [item.monitoredChatId, item])), [store.runtimeStates]);
   const watchStateByChat = useMemo(() => new Map<string, TelegramWatchState>(store.monitorStates.map((item) => [item.monitoredChatId, item])), [store.monitorStates]);
   const rulesByChat = useMemo(() => store.monitorRules.reduce((map, rule) => map.set(rule.monitoredChatId, [...(map.get(rule.monitoredChatId) ?? []), rule]), new Map<string, TelegramWatchRule[]>()), [store.monitorRules]);
   const selectedAuditEvent = useMemo(() => store.outboundAuditEvents.find((item) => item.id === selectedAuditId) ?? null, [selectedAuditId, store.outboundAuditEvents]);
-  const runtimeTabCount = useMemo(() => new Set([...store.monitoredChats.map((item) => item.id), ...store.runtimeStates.map((item) => item.monitoredChatId)]).size, [store.monitoredChats, store.runtimeStates]);
+  const runtimeTabCount = useMemo(() => Math.max(new Set([...store.monitoredChats.map((item) => item.id), ...store.runtimeStates.map((item) => item.monitoredChatId)]).size, store.diagnostics ? 1 : 0), [store.monitoredChats, store.runtimeStates, store.diagnostics]);
 
   const tabs: TabItem<OpsTab>[] = [
     { key: 'logs', label: t('ops.tabLogs'), icon: FileText, count: store.logs.length },
@@ -393,7 +396,7 @@ export function OpsConsole() {
       : tab === 'monitors'
         ? store.monitorRules.length + store.monitorStates.length + store.monitorEvaluations.length + store.monitorAlerts.length > 0
         : tab === 'runtime'
-          ? store.monitoredChats.length + store.runtimeStates.length > 0
+          ? Boolean(store.diagnostics) || store.monitoredChats.length + store.runtimeStates.length > 0
           : tab === 'cron'
             ? store.cronJobs.length + store.cronRuns.length > 0
             : tab === 'notify'
@@ -826,6 +829,16 @@ export function OpsConsole() {
     }
 
     if (tab === 'runtime') {
+      const diagnostics = store.diagnostics;
+      const latestPrompt = diagnostics?.prompt.latest;
+      const telegramRuntimeStatus = diagnostics
+        ? diagnostics.startup.telegram.enabled
+          ? diagnostics.startup.telegram.running
+            ? 'running'
+            : 'enabled'
+          : 'disabled'
+        : '—';
+
       return (
         <div className="space-y-4">
           {editingChatId ? (
@@ -853,6 +866,137 @@ export function OpsConsole() {
               </form>
             </Panel>
           ) : null}
+
+          {diagnostics ? (
+            <>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <Metric label={t('ops.runtimeWarnings')} value={diagnostics.warnings.length} />
+                <Metric label={t('memory.facts')} value={diagnostics.memory.userFacts.total} />
+                <Metric label={t('memory.episodes')} value={diagnostics.memory.episodicMemories.total} />
+                <Metric label={t('ops.continuationState')} value={diagnostics.continuation.activeCount} />
+              </div>
+
+              <Section title={t('ops.sectionDiagnostics')} count={5}>
+                <Card
+                  title={t('ops.runtimeHealth')}
+                  subtitle={fmt(diagnostics.timestamp)}
+                  badges={<><Badge label={diagnostics.health.status} tone={statusTone(diagnostics.health.status)} /><Badge label={diagnostics.health.checks.qdrant.status} tone={statusTone(diagnostics.health.checks.qdrant.status)} /></>}
+                  rows={[
+                    [t('ops.healthStatus'), diagnostics.health.status],
+                    [t('ops.provider'), diagnostics.llm.provider],
+                    [t('ops.storageTarget'), diagnostics.health.checks.storage.target],
+                    [t('ops.responseTime'), `${diagnostics.health.checks.llm.responseTimeMs}ms`],
+                    [t('ops.memoryEntries'), String(diagnostics.health.metrics.memory.totalEntries)],
+                    [t('ops.updated'), fmt(diagnostics.health.timestamp)],
+                  ]}
+                />
+                <Card
+                  title={t('ops.soulConfig')}
+                  subtitle={diagnostics.soul.source}
+                  badges={<><Badge label={diagnostics.soul.sourceKind} tone="accent" /><Badge label={diagnostics.soul.watching ? t('ops.active') : t('ops.paused')} tone={statusTone(diagnostics.soul.watching ? 'active' : 'paused')} /></>}
+                  rows={[
+                    [t('ops.source'), diagnostics.soul.source],
+                    [t('ops.soulSourceKind'), diagnostics.soul.sourceKind],
+                    [t('ops.configuredPath'), diagnostics.soul.configuredPath ?? '—'],
+                    [t('ops.watching'), diagnostics.soul.watching ? t('ops.active') : t('ops.paused')],
+                    [t('ops.updated'), fmt(diagnostics.timestamp)],
+                  ]}
+                />
+                <Card
+                  title={t('ops.startupConfig')}
+                  subtitle={diagnostics.startup.storage.driver}
+                  badges={<><Badge label={telegramRuntimeStatus} tone={statusTone(telegramRuntimeStatus)} /><Badge label={diagnostics.startup.applescript.status} tone={statusTone(diagnostics.startup.applescript.status)} /></>}
+                  rows={[
+                    [t('ops.tokenSource'), diagnostics.startup.telegram.tokenConfigured ? diagnostics.startup.telegram.tokenSource : '—'],
+                    [t('ops.allowlist'), String(diagnostics.startup.telegram.allowedUsersCount)],
+                    [t('ops.platform'), diagnostics.startup.applescript.platform],
+                    [t('ops.registered'), diagnostics.startup.applescript.registered ? t('ops.active') : '—'],
+                    [t('ops.configuredPath'), diagnostics.startup.storage.dataFilePath || diagnostics.startup.storage.dbFilePath || '—'],
+                  ]}
+                />
+                <Card
+                  title={t('ops.memoryVectorState')}
+                  subtitle={diagnostics.qdrant.url ?? '—'}
+                  badges={<><Badge label={diagnostics.health.checks.qdrant.status} tone={statusTone(diagnostics.health.checks.qdrant.status)} /><Badge label={diagnostics.qdrant.circuitOpen ? 'circuit_open' : 'circuit_closed'} tone={statusTone(diagnostics.qdrant.circuitOpen ? 'warning' : 'success')} /></>}
+                  rows={[
+                    [t('memory.facts'), String(diagnostics.memory.userFacts.total)],
+                    [t('memory.episodes'), String(diagnostics.memory.episodicMemories.total)],
+                    [t('ops.memoryVersion'), String(diagnostics.memory.processingState.version)],
+                    [t('ops.lastProcessedUserMessage'), diagnostics.memory.processingState.lastProcessedUserMessageId ?? '—'],
+                    [t('ops.collection'), diagnostics.qdrant.collectionName ?? '—'],
+                    [t('ops.vectorSize'), String(diagnostics.qdrant.vectorSize ?? '—')],
+                    [t('ops.failures'), String(diagnostics.qdrant.consecutiveFailures)],
+                  ]}
+                />
+                <Card
+                  title={t('ops.promptDiagnostics')}
+                  subtitle={latestPrompt ? fmt(latestPrompt.timestamp) : undefined}
+                  badges={<>{latestPrompt ? <Badge label={latestPrompt.prompt.budgetPressure} tone={statusTone(latestPrompt.prompt.budgetPressure)} /> : <Badge label="idle" tone="neutral" />}{latestPrompt ? <Badge label={latestPrompt.executionMode} tone={statusTone(latestPrompt.executionMode)} /> : null}</>}
+                  rows={[
+                    [t('ops.budgetPressure'), latestPrompt?.prompt.budgetPressure ?? '—'],
+                    [t('ops.trimmedSections'), String(latestPrompt?.prompt.trimmedSectionIds.length ?? 0)],
+                    [t('ops.trimmedHistory'), String(latestPrompt?.prompt.trimmedHistoryCount ?? 0)],
+                    [t('ops.compressedSections'), String(latestPrompt?.prompt.compressedSectionIds.length ?? 0)],
+                    [t('ops.systemSections'), String(latestPrompt?.prompt.systemSectionCount ?? 0)],
+                    [t('ops.historyMessages'), String(latestPrompt?.prompt.historyMessageCount ?? 0)],
+                  ]}
+                  body={latestPrompt ? [
+                    `conversationId=${latestPrompt.conversationId}`,
+                    `mode=${latestPrompt.mode}`,
+                    `executionReasons=${latestPrompt.executionReasons.join(', ') || '—'}`,
+                    `availablePromptTokens=${latestPrompt.prompt.availablePromptTokens}`,
+                    `reservedToolRoundTokens=${latestPrompt.prompt.reservedToolRoundTokens}`,
+                    `reservedStructuredFinishTokens=${latestPrompt.prompt.reservedStructuredFinishTokens}`,
+                    `soulSource=${latestPrompt.soulSource}`,
+                  ].join('\n') : undefined}
+                />
+              </Section>
+
+              <Section title={t('ops.continuationState')} count={filteredContinuations.length}>
+                {filteredContinuations.length === 0 ? (
+                  <PageEmpty label={t('ops.noContinuations')} />
+                ) : (
+                  filteredContinuations.map((item) => (
+                    <Card
+                      key={`${item.conversationId}-${item.userMessageId}`}
+                      title={item.conversationId}
+                      subtitle={item.userMessageId}
+                      badges={<><Badge label={item.status} tone={statusTone(item.status)} /><Badge label={item.budgetPressure} tone={statusTone(item.budgetPressure)} /></>}
+                      rows={[
+                        [t('ops.checkpointPhase'), item.phase],
+                        [t('ops.status'), item.status],
+                        [t('ops.updated'), fmt(item.updatedAt)],
+                        [t('ops.expiresAt'), fmt(item.expiresAt)],
+                        [t('ops.scopeKey'), item.scopeKey],
+                      ]}
+                      body={item.lastErrorCode}
+                    />
+                  ))
+                )}
+              </Section>
+
+              <Section title={t('ops.sectionWarnings')} count={filteredDiagnosticsWarnings.length}>
+                {filteredDiagnosticsWarnings.length === 0 ? (
+                  <PageEmpty label={t('ops.noWarnings')} />
+                ) : (
+                  filteredDiagnosticsWarnings.map((item) => (
+                    <Card
+                      key={item.code}
+                      title={item.subject}
+                      subtitle={item.code}
+                      badges={<Badge label={item.severity} tone={statusTone(item.severity)} />}
+                      rows={[[t('ops.kind'), item.subject], [t('ops.status'), item.severity]]}
+                      body={mergeBody(item.message, item.action ? `${t('ops.recommendedAction')}: ${item.action}` : undefined)}
+                    />
+                  ))
+                )}
+              </Section>
+            </>
+          ) : (
+            <Panel title={t('ops.sectionDiagnostics')}>
+              <PageEmpty label={t('ops.noDiagnostics')} />
+            </Panel>
+          )}
 
           <Section title={t('ops.sectionMonitoredChats')} count={filteredMonitoredChats.length}>
             {filteredMonitoredChats.length === 0 ? (

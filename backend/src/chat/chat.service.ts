@@ -19,7 +19,7 @@ import {
   DEFAULT_CONVERSATION_TITLE,
 } from '../common/constants';
 import { LlmService } from '../llm/llm.service';
-import type { LlmMessage, LlmStreamChunk } from '../llm/interfaces/llm.interface';
+import type { LlmCompletionOptions, LlmMessage, LlmStreamChunk } from '../llm/interfaces/llm.interface';
 import { ToolOrchestratorService } from '../tools/core/tool-orchestrator.service';
 import type { ToolExecutionContext } from '../tools/core/tool.types';
 import { ArchiveChatRetrieverService } from '../memory/archive/archive-chat-retriever.service';
@@ -41,6 +41,13 @@ import { SelfModelService } from '../agent/identity/reflection/self-model.servic
 import { Conversation } from './entities/conversation.entity';
 import { Message } from './entities/message.entity';
 import { CHAT_REPOSITORY, ChatRepository } from './repositories/chat.repository';
+import { ConversationExecutionStateService } from './runtime/conversation-execution-state.service';
+import { PromptAssemblyService } from './runtime/prompt-assembly.service';
+import { PromptBudgetService } from './runtime/prompt-budget.service';
+import type { TurnExecutionPlan } from './runtime/prompt-assembly.types';
+import { TurnExecutionPlannerService } from './runtime/turn-execution-planner.service';
+import { TurnResolutionDiagnosticsService } from './runtime/turn-resolution-diagnostics.service';
+import type { TurnExecutionBudgetSnapshot, TurnExecutionPhase } from './runtime/turn-execution-state.types';
 import { ContextTrimService } from './context-trim.service';
 import { TurnResponseValidatorService } from './validation/turn-validator.service';
 import { SessionReflectionService } from '../memory/action-log/session-reflection.service';
@@ -68,17 +75,27 @@ type TurnContext = {
   userProfile: AgentUserProfile;
   userProfileSource: AgentUserProfileSource;
   messages: LlmMessage[];
+  completionOptions: LlmCompletionOptions;
   responseDirectives: ResponseDirectives;
   memoryGrounding: MemoryGroundingContext;
   needsBufferedCompletion: boolean;
+  budget: TurnExecutionBudgetSnapshot;
+  executionPlan: TurnExecutionPlan;
   recalledMemories: RecalledMemory[];
   resolvedUserMemory?: ResolvedUserMemoryContext;
+  userMessageId: string;
+  scopeKey: string;
   userMessageContent: string;
 };
 
 type TurnPreparationResult =
   | { commandHandled: true; conversation: Conversation; operationNote: string }
   | { commandHandled: false; turnContext: TurnContext };
+
+type TurnExecutionResult = {
+  content: string;
+  continuationFallback: boolean;
+};
 
 @Injectable()
 export class ChatService {
@@ -98,6 +115,7 @@ export class ChatService {
       draft,
       turnContext.responseDirectives,
       turnContext.memoryGrounding,
+      turnContext.completionOptions,
     );
   }
 
@@ -117,6 +135,11 @@ export class ChatService {
     private readonly identityCaptureService: IdentityCaptureService,
     private readonly identityRecallService: IdentityRecallService,
     private readonly selfModelService: SelfModelService,
+    private readonly promptAssemblyService: PromptAssemblyService,
+    private readonly promptBudgetService: PromptBudgetService,
+    private readonly turnExecutionPlanner: TurnExecutionPlannerService,
+    private readonly turnResolutionDiagnostics: TurnResolutionDiagnosticsService,
+    private readonly executionStateService: ConversationExecutionStateService,
     private readonly contextTrimService: ContextTrimService,
     private readonly toolOrchestrator: ToolOrchestratorService,
     @Inject(CHAT_REPOSITORY) private readonly chatRepository: ChatRepository,
@@ -179,27 +202,8 @@ export class ChatService {
     }
 
     const { turnContext } = preparation;
-
-    let resultContent: string;
-    if (this.toolOrchestrator.isEnabled) {
-      const toolExecCtx: ToolExecutionContext = {
-        scopeKey: profileContext.scopeKey,
-        conversationId: turnContext.conversation.id,
-        excludeTools: profileContext.excludeTools,
-        meta: profileContext.toolMeta,
-      };
-      const toolResult = await this.toolOrchestrator.completeWithTools(turnContext.messages, undefined, toolExecCtx);
-      if (toolResult.toolRoundsUsed > 0) {
-        this.logger.debug(`Tool loop: ${toolResult.toolRoundsUsed} rounds, calls=${toolResult.toolCallLog.map((c) => c.name).join(',')}`);
-      }
-      resultContent = await this.finalizeAssistantDraft(turnContext.messages, toolResult.content, turnContext);
-    } else {
-      resultContent = await this.turnResponseValidator.completeWithValidation(
-        turnContext.messages,
-        turnContext.responseDirectives,
-        turnContext.memoryGrounding,
-      );
-    }
+    const executionResult = await this.executeTurnToContent(turnContext, profileContext);
+    const resultContent = executionResult.content;
 
     const assistantMessage = new Message({
       conversationId: turnContext.conversation.id,
@@ -208,10 +212,17 @@ export class ChatService {
     });
     turnContext.conversation.addMessage(assistantMessage);
     await this.chatRepository.saveConversation(turnContext.conversation);
-    await this.commitManagedMemory(turnContext.resolvedUserMemory);
+    if (!executionResult.continuationFallback) {
+      await this.commitManagedMemory(turnContext.resolvedUserMemory);
+      if (turnContext.executionPlan.mode === 'staged') {
+        await this.executionStateService.completeTurn(turnContext.conversation.id, turnContext.userMessageId, turnContext.scopeKey);
+      }
+    }
 
     // Memory v2: fire-and-forget auto-capture
-    this.fireAndForgetCapture(turnContext.userMessageContent, resultContent, turnContext.conversation.id, assistantMessage.id, profileContext.scopeKey);
+    if (!executionResult.continuationFallback) {
+      this.fireAndForgetCapture(turnContext.userMessageContent, resultContent, turnContext.conversation.id, assistantMessage.id, profileContext.scopeKey);
+    }
 
     // Track activity for session reflection
     this.trackActivity(turnContext.conversation.id, turnContext.conversation.getMessageHistory().length, profileContext.scopeKey);
@@ -251,6 +262,178 @@ export class ChatService {
     }
   }
 
+  private async executeTurnToContent(
+    turnContext: TurnContext,
+    profileContext: ChatProfileContext,
+  ): Promise<TurnExecutionResult> {
+    if (turnContext.executionPlan.mode === 'staged') {
+      await this.saveExecutionCheckpoint(turnContext, 'execute');
+    }
+
+    try {
+      if (this.toolOrchestrator.isEnabled) {
+        const toolExecCtx: ToolExecutionContext = {
+          scopeKey: profileContext.scopeKey,
+          conversationId: turnContext.conversation.id,
+          excludeTools: profileContext.excludeTools,
+          meta: profileContext.toolMeta,
+        };
+        const toolResult = await this.toolOrchestrator.completeWithTools(
+          turnContext.messages,
+          turnContext.completionOptions,
+          toolExecCtx,
+        );
+        if (toolResult.toolRoundsUsed > 0) {
+          this.logger.debug(`Tool loop: ${toolResult.toolRoundsUsed} rounds, calls=${toolResult.toolCallLog.map((c) => c.name).join(',')}`);
+        }
+
+        const finalizedContent = await this.finalizeAssistantDraft(turnContext.messages, toolResult.content, turnContext);
+        if (turnContext.executionPlan.mode === 'staged') {
+          await this.saveExecutionCheckpoint(turnContext, 'finalize', finalizedContent);
+        }
+
+        return {
+          content: finalizedContent,
+          continuationFallback: false,
+        };
+      }
+
+      const finalizedContent = await this.turnResponseValidator.completeWithValidation(
+        turnContext.messages,
+        turnContext.responseDirectives,
+        turnContext.memoryGrounding,
+        turnContext.completionOptions,
+      );
+      if (turnContext.executionPlan.mode === 'staged') {
+        await this.saveExecutionCheckpoint(turnContext, 'finalize', finalizedContent);
+      }
+
+      return {
+        content: finalizedContent,
+        continuationFallback: false,
+      };
+    } catch (error) {
+      const fallback = await this.handleExecutionFailure(error, turnContext);
+      if (fallback) {
+        return fallback;
+      }
+      throw error;
+    }
+  }
+
+  private async handleExecutionFailure(
+    error: unknown,
+    turnContext: TurnContext,
+    partialResponse?: string,
+  ): Promise<TurnExecutionResult | undefined> {
+    const classified = this.llmService.classifyRuntimeError(error);
+    const resumable =
+      turnContext.executionPlan.mode === 'staged' &&
+      (classified.retryable || classified.code === 'rate_limited' || classified.code === 'budget_exhausted');
+    if (!resumable) {
+      return undefined;
+    }
+
+    this.logger.warn(`Turn execution paused with checkpoint: code=${classified.code}, conversation=${turnContext.conversation.id}`);
+    await this.saveExecutionCheckpoint(turnContext, 'execute', partialResponse, classified.code);
+
+    return {
+      content: this.buildContinuationResponse(turnContext, classified.code),
+      continuationFallback: true,
+    };
+  }
+
+  private async saveExecutionCheckpoint(
+    turnContext: TurnContext,
+    phase: TurnExecutionPhase,
+    partialResponse?: string,
+    lastErrorCode?: string,
+  ): Promise<void> {
+    if (turnContext.executionPlan.mode !== 'staged') {
+      return;
+    }
+
+    await this.executionStateService.saveCheckpoint({
+      conversationId: turnContext.conversation.id,
+      scopeKey: turnContext.scopeKey,
+      userMessageId: turnContext.userMessageId,
+      mode: turnContext.executionPlan.mode,
+      phase,
+      workingSummary: turnContext.executionPlan.workingSummary ?? turnContext.userMessageContent,
+      remainingSteps: turnContext.executionPlan.remainingSteps ?? [turnContext.userMessageContent.slice(0, 240)],
+      ...(partialResponse ? { partialResponse } : {}),
+      ...(lastErrorCode ? { lastErrorCode } : {}),
+      budget: turnContext.budget,
+    });
+  }
+
+  private buildContinuationResponse(
+    turnContext: TurnContext,
+    errorCode: 'auth' | 'budget_exhausted' | 'empty_stream' | 'malformed_stream' | 'rate_limited' | 'timeout' | 'upstream' | 'unknown',
+  ): string {
+    const remainingSteps = turnContext.executionPlan.remainingSteps ?? [];
+    const remainingSummary = remainingSteps.length > 0 ? remainingSteps.slice(0, 3).join('; ') : turnContext.userMessageContent.slice(0, 160);
+
+    if (this.shouldRespondInRussian(turnContext)) {
+      return [
+        `Выполнение задачи временно приостановлено: ${this.describeFailure(errorCode, 'ru')}.`,
+        'Промежуточное состояние сохранено в checkpoint.',
+        `Чтобы продолжить с сохранённого места, напиши «продолжай».`,
+        `Оставшийся фокус: ${remainingSummary}`,
+      ].join(' ');
+    }
+
+    return [
+      `Task execution was paused: ${this.describeFailure(errorCode, 'en')}.`,
+      'Progress has been preserved in a continuation checkpoint.',
+      'To continue from the saved state, reply with "continue".',
+      `Remaining focus: ${remainingSummary}`,
+    ].join(' ');
+  }
+
+  private describeFailure(
+    errorCode: 'auth' | 'budget_exhausted' | 'empty_stream' | 'malformed_stream' | 'rate_limited' | 'timeout' | 'upstream' | 'unknown',
+    language: 'ru' | 'en',
+  ): string {
+    if (language === 'ru') {
+      switch (errorCode) {
+        case 'budget_exhausted':
+          return 'достигнут предел prompt budget для текущего шага';
+        case 'timeout':
+          return 'истёк лимит времени выполнения';
+        case 'rate_limited':
+          return 'достигнут лимит запросов к LLM';
+        case 'upstream':
+          return 'внешний LLM-сервис ответил нестабильно';
+        case 'empty_stream':
+        case 'malformed_stream':
+          return 'LLM вернул неполный поток ответа';
+        default:
+          return 'во время staged execution произошёл временный сбой';
+      }
+    }
+
+    switch (errorCode) {
+      case 'budget_exhausted':
+        return 'the turn exhausted its prompt budget window';
+      case 'timeout':
+        return 'the execution hit a time limit';
+      case 'rate_limited':
+        return 'the LLM provider rate-limited the request';
+      case 'upstream':
+        return 'the upstream LLM service responded unstably';
+      case 'empty_stream':
+      case 'malformed_stream':
+        return 'the LLM returned an incomplete response stream';
+      default:
+        return 'a transient failure occurred during staged execution';
+    }
+  }
+
+  private shouldRespondInRussian(turnContext: TurnContext): boolean {
+    return turnContext.responseDirectives.language === 'ru' || /[а-яё]/i.test(turnContext.userMessageContent);
+  }
+
   async *streamMessage(
     conversationId: string | undefined,
     content: string,
@@ -276,11 +459,8 @@ export class ChatService {
     const { turnContext } = preparation;
 
     if (turnContext.needsBufferedCompletion) {
-      const bufferedContent = await this.turnResponseValidator.completeWithValidation(
-        turnContext.messages,
-        turnContext.responseDirectives,
-        turnContext.memoryGrounding,
-      );
+      const executionResult = await this.executeTurnToContent(turnContext, profileContext);
+      const bufferedContent = executionResult.content;
       const messageId = crypto.randomUUID();
       yield { chunk: { content: bufferedContent, done: false }, conversationId: turnContext.conversation.id, messageId };
       yield { chunk: { content: '', done: true }, conversationId: turnContext.conversation.id, messageId };
@@ -293,18 +473,29 @@ export class ChatService {
       });
       turnContext.conversation.addMessage(assistantMessage);
       await this.chatRepository.saveConversation(turnContext.conversation);
-      await this.commitManagedMemory(turnContext.resolvedUserMemory);
+      if (!executionResult.continuationFallback) {
+        await this.commitManagedMemory(turnContext.resolvedUserMemory);
+        if (turnContext.executionPlan.mode === 'staged') {
+          await this.executionStateService.completeTurn(turnContext.conversation.id, turnContext.userMessageId, turnContext.scopeKey);
+        }
+      }
 
       // Memory v2: fire-and-forget auto-capture
-      this.fireAndForgetCapture(turnContext.userMessageContent, bufferedContent, turnContext.conversation.id, messageId, profileContext.scopeKey);
+      if (!executionResult.continuationFallback) {
+        this.fireAndForgetCapture(turnContext.userMessageContent, bufferedContent, turnContext.conversation.id, messageId, profileContext.scopeKey);
+      }
       return;
     }
 
     // Persist conversation with user message before streaming,
     // so the user's input is never lost on LLM timeout/abort.
     await this.chatRepository.saveConversation(turnContext.conversation);
+    if (turnContext.executionPlan.mode === 'staged') {
+      await this.saveExecutionCheckpoint(turnContext, 'execute');
+    }
 
     let fullContent = '';
+    let continuationFallback = false;
     const messageId = crypto.randomUUID();
 
     const toolExecCtx: ToolExecutionContext = {
@@ -316,12 +507,36 @@ export class ChatService {
     };
 
     const streamSource = this.toolOrchestrator.isEnabled
-      ? this.toolOrchestrator.streamWithTools(turnContext.messages, { signal: profileContext.signal }, toolExecCtx)
-      : this.llmService.stream(turnContext.messages, { signal: profileContext.signal });
+      ? this.toolOrchestrator.streamWithTools(
+          turnContext.messages,
+          { ...turnContext.completionOptions, signal: profileContext.signal },
+          toolExecCtx,
+        )
+      : this.llmService.stream(turnContext.messages, { ...turnContext.completionOptions, signal: profileContext.signal });
 
-    for await (const chunk of streamSource) {
-      fullContent += chunk.content;
-      yield { chunk, conversationId: turnContext.conversation.id, messageId };
+    try {
+      for await (const chunk of streamSource) {
+        fullContent += chunk.content;
+        yield { chunk, conversationId: turnContext.conversation.id, messageId };
+      }
+    } catch (error) {
+      const fallback = await this.handleExecutionFailure(error, turnContext, fullContent || undefined);
+      if (!fallback) {
+        throw error;
+      }
+
+      continuationFallback = true;
+      const fallbackContent = fullContent.trim().length > 0
+        ? `${fullContent}\n\n${fallback.content}`
+        : fallback.content;
+      const deltaContent = fullContent.trim().length > 0 ? `\n\n${fallback.content}` : fallback.content;
+      fullContent = fallbackContent;
+      yield { chunk: { content: deltaContent, done: false }, conversationId: turnContext.conversation.id, messageId };
+      yield { chunk: { content: '', done: true }, conversationId: turnContext.conversation.id, messageId };
+    }
+
+    if (!continuationFallback && turnContext.executionPlan.mode === 'staged') {
+      await this.saveExecutionCheckpoint(turnContext, 'finalize', fullContent || undefined);
     }
 
     const assistantMessage = new Message({
@@ -332,7 +547,12 @@ export class ChatService {
     });
     turnContext.conversation.addMessage(assistantMessage);
     await this.chatRepository.saveConversation(turnContext.conversation);
-    await this.commitManagedMemory(turnContext.resolvedUserMemory);
+    if (!continuationFallback) {
+      await this.commitManagedMemory(turnContext.resolvedUserMemory);
+      if (turnContext.executionPlan.mode === 'staged') {
+        await this.executionStateService.completeTurn(turnContext.conversation.id, turnContext.userMessageId, turnContext.scopeKey);
+      }
+    }
 
     // Memory v2: fire-and-forget auto-capture
     // Skip if memory_manage tool was used — it already handled memory explicitly,
@@ -340,6 +560,10 @@ export class ChatService {
     const usedTools = this.toolOrchestrator.isEnabled
       ? this.toolOrchestrator.lastUsedToolNames
       : new Set<string>();
+
+    if (continuationFallback) {
+      return;
+    }
 
     if (usedTools.has('memory_manage')) {
       this.logger.debug('Skipping auto-capture: memory_manage tool was used in this turn');
@@ -469,6 +693,10 @@ export class ChatService {
       this.logger.warn(`Context trim failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    const currentUserMessage = [...activeConversation.messages].at(-1);
+    const userMessageId = currentUserMessage?.id ?? crypto.randomUUID();
+    const scopeKey = activeConversation.scopeKey ?? profileContext.scopeKey ?? 'local:default';
+
     const resolvedMode = this.resolveMode(activeConversation, profileContext);
     const requestedResponseDirectives = this.responseDirectivesService.resolve(content);
 
@@ -507,22 +735,112 @@ export class ChatService {
       structuredMemoryCount: userFacts.length + episodicMemories.length,
     });
     const responseDirectives = this.applyMemoryGroundingDirectives(requestedResponseDirectives, memoryGrounding);
-    const messages = this.buildMessages(
-      activeConversation,
-      resolvedMode.mode,
-      userProfile,
-      userProfileSource,
-      userFacts,
-      episodicMemories,
-      recalledMemories,
-      identityTraits,
-      selfModelRaw,
-      archiveEvidence,
-      memoryGrounding,
-      responseDirectives,
-      profileContext.extraSystemInstruction,
-    );
     const needsBufferedCompletion = this.turnResponseValidator.shouldUseBufferedCompletion(responseDirectives, memoryGrounding);
+    const runtimeProfile = this.llmService.getRuntimeProfile();
+    const baseAssembly = this.promptAssemblyService.assemble(
+      {
+        conversation: activeConversation,
+        mode: resolvedMode.mode,
+        userProfile,
+        userProfileSource,
+        userFacts,
+        episodicMemories,
+        recalledMemories,
+        identityTraits,
+        selfModelRaw,
+        archiveEvidence,
+        memoryGrounding,
+        responseDirectives,
+        extraSystemInstruction: profileContext.extraSystemInstruction,
+      },
+      runtimeProfile.provider,
+    );
+    const initialBudgetedPrompt = this.promptBudgetService.budget({
+      assembly: baseAssembly,
+      runtimeProfile,
+      needsBufferedCompletion,
+      toolsEnabled: this.toolOrchestrator.isEnabled,
+    });
+    const activeCheckpoint = await this.executionStateService.getActiveCheckpoint(activeConversation.id, scopeKey);
+    const executionPlan = this.turnExecutionPlanner.planTurn({
+      content,
+      assembly: baseAssembly,
+      budgetedPrompt: initialBudgetedPrompt,
+      runtimeProfile,
+      activeCheckpoint,
+    });
+    const finalAssembly = executionPlan.executionInstruction
+      ? this.promptAssemblyService.appendSystemSection(
+          baseAssembly,
+          {
+            id: 'execution_plan',
+            title: 'Execution Plan',
+            priority: 'critical',
+            trimPolicy: 'never',
+            source: 'directive',
+            content: executionPlan.executionInstruction,
+          },
+          runtimeProfile.provider,
+        )
+      : baseAssembly;
+    const budgetedPrompt = this.promptBudgetService.budget({
+      assembly: finalAssembly,
+      runtimeProfile,
+      needsBufferedCompletion,
+      toolsEnabled: this.toolOrchestrator.isEnabled,
+    });
+
+    if (executionPlan.mode === 'staged') {
+      await this.executionStateService.saveCheckpoint({
+        conversationId: activeConversation.id,
+        scopeKey,
+        userMessageId,
+        mode: executionPlan.mode,
+        phase: executionPlan.shouldResumeFromCheckpoint ? executionPlan.checkpoint?.phase ?? 'plan' : 'plan',
+        workingSummary: executionPlan.workingSummary ?? content,
+        remainingSteps: executionPlan.remainingSteps ?? [content.slice(0, 240)],
+        ...(executionPlan.checkpoint?.partialResponse ? { partialResponse: executionPlan.checkpoint.partialResponse } : {}),
+        budget: budgetedPrompt.budget,
+      });
+    }
+
+    this.turnResolutionDiagnostics.record({
+      timestamp: new Date().toISOString(),
+      conversationId: activeConversation.id,
+      scopeKey,
+      mode: resolvedMode.mode,
+      modeSource: resolvedMode.source,
+      executionMode: executionPlan.mode,
+      executionReasons: executionPlan.reasonCodes,
+      counts: {
+        userFacts: userFacts.length,
+        episodicMemories: episodicMemories.length,
+        recalledMemories: recalledMemories.length,
+        archiveEvidence: archiveEvidence.length,
+        identityTraits: identityTraits.length,
+      },
+      soulSource: this.systemPromptBuilder.getRuntimeState().source,
+      prompt: {
+        ...budgetedPrompt.budget,
+        systemSectionCount: budgetedPrompt.systemSections.length,
+        historyMessageCount: budgetedPrompt.historyMessages.length,
+      },
+      checkpoint: {
+        active: executionPlan.mode === 'staged',
+        resumed: executionPlan.shouldResumeFromCheckpoint,
+        ...(executionPlan.checkpoint?.phase
+          ? { phase: executionPlan.checkpoint.phase }
+          : executionPlan.mode === 'staged'
+            ? { phase: 'plan' }
+            : {}),
+      },
+      memoryGrounding: {
+        isMemoryQuestion: memoryGrounding.isMemoryQuestion,
+        ...(memoryGrounding.intent ? { intent: memoryGrounding.intent } : {}),
+        evidenceStrength: memoryGrounding.evidenceStrength,
+        uncertaintyFirst: memoryGrounding.shouldUseUncertaintyFirst,
+      },
+    });
 
     this.agentMetricsService.recordResolution({
       mode: resolvedMode.mode,
@@ -533,7 +851,7 @@ export class ChatService {
     });
 
     this.logger.debug(
-      `Turn context: mode=${resolvedMode.mode} (${resolvedMode.source}), managedFacts=${userFacts.length}, managedEpisodes=${episodicMemories.length}, recalled=${recalledMemories.length}, identity=${identityTraits.length}, selfModel=${selfModelRaw.length > 0 ? 'yes' : 'no'}, archive=${archiveEvidence.length}, grounding=${memoryGrounding.evidenceStrength}`,
+      `Turn context: mode=${resolvedMode.mode} (${resolvedMode.source}), execution=${executionPlan.mode}, managedFacts=${userFacts.length}, managedEpisodes=${episodicMemories.length}, recalled=${recalledMemories.length}, identity=${identityTraits.length}, selfModel=${selfModelRaw.length > 0 ? 'yes' : 'no'}, archive=${archiveEvidence.length}, grounding=${memoryGrounding.evidenceStrength}, budget=${budgetedPrompt.budget.budgetPressure}, trimmedSections=${budgetedPrompt.budget.trimmedSectionIds.length}, trimmedHistory=${budgetedPrompt.budget.trimmedHistoryCount}`,
     );
 
     return {
@@ -541,12 +859,17 @@ export class ChatService {
       mode: resolvedMode,
       userProfile,
       userProfileSource,
-      messages,
+      messages: budgetedPrompt.messages,
+      completionOptions: budgetedPrompt.completionOptions,
       responseDirectives,
       memoryGrounding,
       needsBufferedCompletion,
+      budget: budgetedPrompt.budget,
+      executionPlan,
       recalledMemories,
       resolvedUserMemory,
+      userMessageId,
+      scopeKey,
       userMessageContent: content,
     };
   }

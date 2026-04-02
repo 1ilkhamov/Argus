@@ -18,6 +18,7 @@ import {
   LlmStreamChunk,
   LlmToolCall,
 } from './interfaces/llm.interface';
+import type { LlmFailureClassification, LlmRuntimeProfile } from './llm-runtime.types';
 
 type HealthResult = {
   status: 'up' | 'down';
@@ -97,11 +98,7 @@ type ErrorResponse = {
   message?: string;
 };
 
-type ClassifiedLlmError = {
-  code: 'auth' | 'empty_stream' | 'malformed_stream' | 'rate_limited' | 'timeout' | 'upstream' | 'unknown';
-  message: string;
-  retryable: boolean;
-};
+type ClassifiedLlmError = LlmFailureClassification;
 
 const COMPLETION_TIMEOUT_MS = parseInt(process.env.LLM_COMPLETION_TIMEOUT_MS ?? '45000', 10);
 const STREAM_TIMEOUT_MS = parseInt(process.env.LLM_STREAM_TIMEOUT_MS ?? '90000', 10);
@@ -134,6 +131,25 @@ export class LlmService implements OnModuleInit {
     this.logger.log(
       `LLM configured: provider=${this.provider}, model=${this.defaultModel}, maxTokens=${this.defaultMaxTokens}`,
     );
+  }
+
+  getRuntimeProfile(): LlmRuntimeProfile {
+    return {
+      provider: this.provider,
+      model: this.defaultModel,
+      maxCompletionTokens: this.defaultMaxTokens,
+      contextWindowTokens: this.resolveContextWindowTokens(),
+      completionTimeoutMs: COMPLETION_TIMEOUT_MS,
+      streamTimeoutMs: STREAM_TIMEOUT_MS,
+    };
+  }
+
+  classifyRuntimeError(error: unknown): LlmFailureClassification {
+    if (error instanceof LlmException && error.originalError) {
+      return this.classifyLlmError(error.originalError);
+    }
+
+    return this.classifyLlmError(error);
   }
 
   async complete(
@@ -792,6 +808,18 @@ export class LlmService implements OnModuleInit {
     }
 
     if (
+      normalized.includes('maximum context length') ||
+      normalized.includes('context length exceeded') ||
+      normalized.includes('context window') ||
+      normalized.includes('prompt is too long') ||
+      normalized.includes('too many tokens') ||
+      normalized.includes('input is too long') ||
+      normalized.includes('token limit exceeded')
+    ) {
+      return { code: 'budget_exhausted', message, retryable: false };
+    }
+
+    if (
       normalized.includes('unexpected token') ||
       normalized.includes('invalid json') ||
       normalized.includes('malformed') ||
@@ -842,6 +870,34 @@ export class LlmService implements OnModuleInit {
 
     parts.push(`message=${classified.message}`);
     this.logger.error(`LLM ${operation} failed: ${parts.join(', ')}`);
+  }
+
+  private resolveContextWindowTokens(): number {
+    const configured = this.configService.get<number>('llm.contextWindowTokens');
+    if (configured && configured > 0) {
+      return configured;
+    }
+
+    const model = this.defaultModel.toLocaleLowerCase();
+    if (this.provider === 'anthropic') {
+      return 200_000;
+    }
+
+    if (this.provider === 'google') {
+      return 128_000;
+    }
+
+    if (this.provider === 'local') {
+      if (model.includes('128k')) {
+        return 128_000;
+      }
+      if (model.includes('32k')) {
+        return 32_000;
+      }
+      return 16_384;
+    }
+
+    return 128_000;
   }
 
   private toOpenAiMessages(messages: LlmMessage[]): Array<Record<string, unknown>> {

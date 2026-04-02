@@ -5,6 +5,7 @@ import { dirname, isAbsolute, resolve } from 'path';
 
 import type { AgentUserProfile } from '../agent/profile/user-profile.types';
 import type { Message } from '../chat/entities/message.entity';
+import type { TurnExecutionState } from '../chat/runtime/turn-execution-state.types';
 import type { EpisodicMemoryEntry } from '../memory/episodic-memory.types';
 import type { StructuredMemoryTurnReference } from '../memory/structured-memory-metadata.types';
 import type { UserProfileFact } from '../memory/user-profile-facts.types';
@@ -55,6 +56,7 @@ export interface ChatStoreData {
   userFacts: SerializedUserProfileFact[];
   episodicMemories: SerializedEpisodicMemoryEntry[];
   managedMemoryStates: SerializedManagedMemoryState[];
+  turnExecutionStates: TurnExecutionState[];
 }
 
 @Injectable()
@@ -83,7 +85,14 @@ export class FileStoreService implements OnModuleInit {
     const filePath = this.getDataFilePath();
     const raw = await readFile(filePath, 'utf-8');
     if (!raw.trim()) {
-      return { conversations: [], userProfiles: [], userFacts: [], episodicMemories: [], managedMemoryStates: [] };
+      return {
+        conversations: [],
+        userProfiles: [],
+        userFacts: [],
+        episodicMemories: [],
+        managedMemoryStates: [],
+        turnExecutionStates: [],
+      };
     }
 
     try {
@@ -94,6 +103,7 @@ export class FileStoreService implements OnModuleInit {
         userFacts: Array.isArray(parsed.userFacts) ? parsed.userFacts : [],
         episodicMemories: Array.isArray(parsed.episodicMemories) ? parsed.episodicMemories : [],
         managedMemoryStates: Array.isArray(parsed.managedMemoryStates) ? parsed.managedMemoryStates : [],
+        turnExecutionStates: Array.isArray(parsed.turnExecutionStates) ? parsed.turnExecutionStates : [],
       };
     } catch {
       const brokenFilePath = `${filePath}.broken`;
@@ -101,11 +111,29 @@ export class FileStoreService implements OnModuleInit {
       await writeFile(brokenFilePath, raw, 'utf-8');
       await writeFile(
         filePath,
-        JSON.stringify({ conversations: [], userProfiles: [], userFacts: [], episodicMemories: [], managedMemoryStates: [] }, null, 2),
+        JSON.stringify(
+          {
+            conversations: [],
+            userProfiles: [],
+            userFacts: [],
+            episodicMemories: [],
+            managedMemoryStates: [],
+            turnExecutionStates: [],
+          },
+          null,
+          2,
+        ),
         'utf-8',
       );
       this.logger.warn(`Chat store was corrupted and has been reset. Backup: ${brokenFilePath}`);
-      return { conversations: [], userProfiles: [], userFacts: [], episodicMemories: [], managedMemoryStates: [] };
+      return {
+        conversations: [],
+        userProfiles: [],
+        userFacts: [],
+        episodicMemories: [],
+        managedMemoryStates: [],
+        turnExecutionStates: [],
+      };
     }
   }
 
@@ -133,7 +161,18 @@ export class FileStoreService implements OnModuleInit {
     } catch {
       await writeFile(
         filePath,
-        JSON.stringify({ conversations: [], userProfiles: [], userFacts: [], episodicMemories: [], managedMemoryStates: [] }, null, 2),
+        JSON.stringify(
+          {
+            conversations: [],
+            userProfiles: [],
+            userFacts: [],
+            episodicMemories: [],
+            managedMemoryStates: [],
+            turnExecutionStates: [],
+          },
+          null,
+          2,
+        ),
         'utf-8',
       );
       this.logger.log(`Created chat store at ${filePath}`);

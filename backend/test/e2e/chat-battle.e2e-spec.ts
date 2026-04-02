@@ -118,6 +118,14 @@ describe('Chat battle (e2e)', () => {
             yield { content: '', done: true };
           },
           checkHealth: async () => ({ status: 'up', model: 'test-model', responseTimeMs: 1 }),
+          getRuntimeProfile: () => ({
+            provider: 'openai',
+            model: 'test-model',
+            maxCompletionTokens: 4096,
+            contextWindowTokens: 128000,
+            completionTimeoutMs: 120000,
+            streamTimeoutMs: 120000,
+          }),
         });
     } else {
       // eslint-disable-next-line no-console

@@ -365,6 +365,204 @@ export interface StructuredOperationalEventSearchParams {
   limit?: number;
 }
 
+export type OpsDiagnosticWarningSeverity = 'info' | 'warning';
+export type OpsDiagnosticWarningSubject = 'soul' | 'telegram' | 'applescript' | 'storage' | 'qdrant' | 'prompt' | 'continuation';
+export type OpsSoulSourceKind = 'configured_path' | 'data_override' | 'bundled_default' | 'source_default' | 'core_contract_fallback';
+export type OpsBudgetPressure = 'low' | 'medium' | 'high';
+
+export interface OpsDiagnosticWarning {
+  code: string;
+  severity: OpsDiagnosticWarningSeverity;
+  subject: OpsDiagnosticWarningSubject;
+  message: string;
+  action?: string;
+}
+
+export interface OpsDiagnosticsHealthSnapshot {
+  status: 'ok' | 'degraded';
+  timestamp: string;
+  uptime: number;
+  checks: {
+    storage: {
+      status: 'up' | 'down';
+      driver: string;
+      target: string;
+      conversationCount: number;
+      error?: string;
+    };
+    llm: {
+      status: 'up' | 'down';
+      model: string;
+      responseTimeMs: number;
+      error?: string;
+    };
+    embedding: {
+      status: 'up' | 'down' | 'disabled';
+    };
+    qdrant: {
+      status: 'up' | 'down' | 'disabled';
+    };
+  };
+  metrics: {
+    agent: Record<string, unknown>;
+    memory: {
+      totalEntries: number;
+    };
+  };
+}
+
+export interface OpsDiagnosticsSoulState {
+  source: string;
+  sourceKind: OpsSoulSourceKind;
+  watching: boolean;
+  configuredPath?: string;
+}
+
+export interface OpsDiagnosticsLlmRuntimeProfile {
+  provider: string;
+  model: string;
+  maxCompletionTokens: number;
+  contextWindowTokens: number;
+  completionTimeoutMs: number;
+  streamTimeoutMs: number;
+}
+
+export interface OpsDiagnosticsMemoryState {
+  scopeKey: string;
+  interactionPreferencesConfigured: boolean;
+  processingState: {
+    version: number;
+    lastProcessedUserMessageId?: string;
+  };
+  userFacts: {
+    total: number;
+    pinned: number;
+  };
+  episodicMemories: {
+    total: number;
+    pinned: number;
+  };
+}
+
+export interface OpsDiagnosticsPromptSnapshot {
+  timestamp: string;
+  conversationId: string;
+  scopeKey: string;
+  mode: string;
+  modeSource: 'explicit' | 'inferred';
+  executionMode: 'standard' | 'staged';
+  executionReasons: string[];
+  counts: {
+    userFacts: number;
+    episodicMemories: number;
+    recalledMemories: number;
+    archiveEvidence: number;
+    identityTraits: number;
+  };
+  soulSource: string;
+  prompt: {
+    provider: string;
+    model: string;
+    maxContextTokens: number;
+    reservedCompletionTokens: number;
+    reservedRetryTokens: number;
+    reservedToolRoundTokens: number;
+    reservedStructuredFinishTokens: number;
+    availablePromptTokens: number;
+    estimatedInputTokens: number;
+    finalInputTokens: number;
+    trimmedSectionIds: string[];
+    trimmedHistoryCount: number;
+    compressedSectionIds: string[];
+    budgetPressure: OpsBudgetPressure;
+    systemSectionCount: number;
+    historyMessageCount: number;
+  };
+  checkpoint: {
+    active: boolean;
+    resumed: boolean;
+    phase?: 'analyze' | 'plan' | 'execute' | 'finalize';
+  };
+  memoryGrounding: {
+    isMemoryQuestion: boolean;
+    intent?: string;
+    evidenceStrength: string;
+    uncertaintyFirst: boolean;
+  };
+}
+
+export interface OpsDiagnosticsContinuationEntry {
+  conversationId: string;
+  scopeKey: string;
+  userMessageId: string;
+  phase: string;
+  status: string;
+  updatedAt: string;
+  expiresAt: string;
+  budgetPressure: OpsBudgetPressure;
+  lastErrorCode?: string;
+}
+
+export interface OpsDiagnosticsQdrantState {
+  configured: boolean;
+  ready: boolean;
+  circuitOpen: boolean;
+  url?: string;
+  collectionName?: string;
+  vectorSize?: number;
+  consecutiveFailures: number;
+}
+
+export interface OpsDiagnosticsStartupState {
+  storage: {
+    driver: string;
+    dataFilePath: string;
+    dbFilePath: string;
+    memoryDbFilePath: string;
+    postgresConfigured: boolean;
+  };
+  telegram: {
+    enabled: boolean;
+    tokenConfigured: boolean;
+    tokenSource: 'settings' | 'env' | 'none';
+    running: boolean;
+    username: string | null;
+    mode: 'polling' | 'webhook' | null;
+    allowlistConfigured: boolean;
+    allowedUsersCount: number;
+  };
+  applescript: {
+    platform: string;
+    supported: boolean;
+    enabled: boolean;
+    registered: boolean;
+    status: 'available' | 'disabled' | 'unsupported_os';
+  };
+}
+
+export interface OpsDiagnosticsPayload {
+  timestamp: string;
+  health: OpsDiagnosticsHealthSnapshot;
+  llm: OpsDiagnosticsLlmRuntimeProfile;
+  soul: OpsDiagnosticsSoulState;
+  startup: OpsDiagnosticsStartupState;
+  memory: OpsDiagnosticsMemoryState;
+  prompt: {
+    latest?: OpsDiagnosticsPromptSnapshot;
+    recent: OpsDiagnosticsPromptSnapshot[];
+  };
+  telegramClient: {
+    monitoredChats: OpsMonitoredChat[];
+    runtimeStates: TelegramClientMonitorRuntimeState[];
+  };
+  continuation: {
+    activeCount: number;
+    active: OpsDiagnosticsContinuationEntry[];
+  };
+  qdrant: OpsDiagnosticsQdrantState;
+  warnings: OpsDiagnosticWarning[];
+}
+
 function withQuery(endpoint: string, params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -504,5 +702,8 @@ export const opsApi = {
       after: params.after,
       limit: params.limit,
     }));
+  },
+  getDiagnostics(scopeKey?: string): Promise<OpsDiagnosticsPayload> {
+    return apiFetch<OpsDiagnosticsPayload>(withQuery(API_ENDPOINTS.ops.diagnostics, { scopeKey }));
   },
 };

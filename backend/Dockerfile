@@ -13,7 +13,8 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 RUN npx playwright install --with-deps chromium
 COPY --from=builder /app/dist ./dist
+RUN mkdir -p /app/data /app/dist/agent/identity/config
+COPY --from=builder /app/src/agent/identity/config/soul.default.yml ./dist/agent/identity/config/soul.default.yml
 COPY .env.example ./.env.example
-RUN mkdir -p /app/data
 EXPOSE 3000
 CMD ["node", "dist/main"]

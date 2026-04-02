@@ -7,6 +7,7 @@ import {
   type CronJob,
   type CronJobRun,
   type LogSearchParams,
+  type OpsDiagnosticsPayload,
   type OpsMonitoredChat,
   type OutboundAuditSearchParams,
   type ParsedLogEntry,
@@ -34,6 +35,7 @@ interface OpsState {
   monitorEvaluations: TelegramWatchEvaluationResult[];
   monitorAlerts: TelegramWatchAlertRecord[];
   runtimeStates: TelegramClientMonitorRuntimeState[];
+  diagnostics: OpsDiagnosticsPayload | null;
   cronJobs: CronJob[];
   cronRuns: CronJobRun[];
   outboundAuditEvents: TelegramOutboundAuditEvent[];
@@ -86,6 +88,7 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   monitorEvaluations: [],
   monitorAlerts: [],
   runtimeStates: [],
+  diagnostics: null,
   cronJobs: [],
   cronRuns: [],
   outboundAuditEvents: [],
@@ -136,11 +139,14 @@ export const useOpsStore = create<OpsState>((set, get) => ({
   loadRuntimeStates: async () => {
     set({ isLoading: true, error: null });
     try {
-      const [runtimeStates, monitoredChats] = await Promise.all([
-        opsApi.listTelegramClientRuntime(),
-        opsApi.listMonitoredChats(),
-      ]);
-      set({ runtimeStates, monitoredChats, isLoading: false, lastUpdatedAt: touchedAt() });
+      const diagnostics = await opsApi.getDiagnostics();
+      set({
+        runtimeStates: diagnostics.telegramClient.runtimeStates,
+        monitoredChats: diagnostics.telegramClient.monitoredChats,
+        diagnostics,
+        isLoading: false,
+        lastUpdatedAt: touchedAt(),
+      });
     } catch (error) {
       set({ error: toErrorMessage(error, 'Failed to load Telegram runtime'), isLoading: false });
     }

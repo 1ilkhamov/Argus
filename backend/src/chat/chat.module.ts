@@ -11,6 +11,12 @@ import { MemoryModule } from '../memory/memory.module';
 import { StorageModule } from '../storage/storage.module';
 import { ToolsModule } from '../tools/tools.module';
 import { ChatController } from './chat.controller';
+import { ConversationExecutionStateService } from './runtime/conversation-execution-state.service';
+import { PromptAssemblyService } from './runtime/prompt-assembly.service';
+import { PromptBudgetService } from './runtime/prompt-budget.service';
+import { TokenEstimatorService } from './runtime/token-estimator.service';
+import { TurnExecutionPlannerService } from './runtime/turn-execution-planner.service';
+import { TurnResolutionDiagnosticsService } from './runtime/turn-resolution-diagnostics.service';
 import { ChatService } from './chat.service';
 import { ContextTrimService } from './context-trim.service';
 import { TurnResponseValidatorService } from './validation/turn-validator.service';
@@ -22,12 +28,18 @@ import { TurnResponseValidatorService } from './validation/turn-validator.servic
     ChatService,
     ContextTrimService,
     TurnResponseValidatorService,
+    TokenEstimatorService,
+    PromptAssemblyService,
+    PromptBudgetService,
+    TurnExecutionPlannerService,
+    TurnResolutionDiagnosticsService,
+    ConversationExecutionStateService,
     AdminApiKeyGuard,
     AuthenticatedUserGuard,
     ApiKeyGuard,
     RateLimitGuard,
     RateLimitService,
   ],
-  exports: [ChatService, StorageModule],
+  exports: [ChatService, ConversationExecutionStateService, TurnResolutionDiagnosticsService, StorageModule],
 })
 export class ChatModule {}

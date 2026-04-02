@@ -18,6 +18,7 @@ vi.mock('@/api/resources/ops.api', async () => {
       listMonitorAlerts: vi.fn(),
       listTelegramClientRuntime: vi.fn(),
       listMonitoredChats: vi.fn(),
+      getDiagnostics: vi.fn(),
       updateMonitoredChat: vi.fn(),
       listCronJobs: vi.fn(),
       createCronJob: vi.fn(),
@@ -37,6 +38,7 @@ import {
   opsApi,
   type CronJob,
   type CronJobRun,
+  type OpsDiagnosticsPayload,
   type OpsMonitoredChat,
   type PendingNotifySnapshot,
   type StructuredOperationalEvent,
@@ -239,6 +241,181 @@ const operationalEvent: StructuredOperationalEvent = {
   payload: { routeId: 'route-1' },
 };
 
+const diagnostics: OpsDiagnosticsPayload = {
+  timestamp: '2026-03-31T10:05:00.000Z',
+  health: {
+    status: 'ok',
+    timestamp: '2026-03-31T10:05:00.000Z',
+    uptime: 120,
+    checks: {
+      storage: {
+        status: 'up',
+        driver: 'sqlite',
+        target: 'data/argus.db',
+        conversationCount: 3,
+      },
+      llm: {
+        status: 'up',
+        model: 'gpt-4.1-mini',
+        responseTimeMs: 220,
+      },
+      embedding: {
+        status: 'up',
+      },
+      qdrant: {
+        status: 'down',
+      },
+    },
+    metrics: {
+      agent: {},
+      memory: {
+        totalEntries: 7,
+      },
+    },
+  },
+  llm: {
+    provider: 'openai',
+    model: 'gpt-4.1-mini',
+    maxCompletionTokens: 4096,
+    contextWindowTokens: 128000,
+    completionTimeoutMs: 120000,
+    streamTimeoutMs: 120000,
+  },
+  soul: {
+    source: 'data/soul.yml',
+    sourceKind: 'data_override',
+    watching: true,
+    configuredPath: '/app/data/soul.yml',
+  },
+  startup: {
+    storage: {
+      driver: 'sqlite',
+      dataFilePath: 'data',
+      dbFilePath: 'data/argus.db',
+      memoryDbFilePath: 'data/memory.db',
+      postgresConfigured: false,
+    },
+    telegram: {
+      enabled: true,
+      tokenConfigured: true,
+      tokenSource: 'env',
+      running: true,
+      username: 'argus_bot',
+      mode: 'polling',
+      allowlistConfigured: true,
+      allowedUsersCount: 1,
+    },
+    applescript: {
+      platform: 'darwin',
+      supported: true,
+      enabled: true,
+      registered: true,
+      status: 'available',
+    },
+  },
+  memory: {
+    scopeKey: 'local:default',
+    interactionPreferencesConfigured: true,
+    processingState: {
+      version: 2,
+      lastProcessedUserMessageId: 'msg-1',
+    },
+    userFacts: {
+      total: 2,
+      pinned: 1,
+    },
+    episodicMemories: {
+      total: 1,
+      pinned: 0,
+    },
+  },
+  prompt: {
+    latest: {
+      timestamp: '2026-03-31T10:05:00.000Z',
+      conversationId: 'conv-1',
+      scopeKey: 'local:default',
+      mode: 'assistant',
+      modeSource: 'explicit',
+      executionMode: 'staged',
+      executionReasons: ['long_turn', 'budget_pressure_high'],
+      counts: {
+        userFacts: 2,
+        episodicMemories: 1,
+        recalledMemories: 0,
+        archiveEvidence: 0,
+        identityTraits: 3,
+      },
+      soulSource: 'data/soul.yml',
+      prompt: {
+        provider: 'openai',
+        model: 'gpt-4.1-mini',
+        maxContextTokens: 128000,
+        reservedCompletionTokens: 4096,
+        reservedRetryTokens: 1024,
+        reservedToolRoundTokens: 768,
+        reservedStructuredFinishTokens: 256,
+        availablePromptTokens: 121856,
+        estimatedInputTokens: 900,
+        finalInputTokens: 980,
+        trimmedSectionIds: ['archive'],
+        trimmedHistoryCount: 2,
+        compressedSectionIds: [],
+        budgetPressure: 'medium',
+        systemSectionCount: 5,
+        historyMessageCount: 12,
+      },
+      checkpoint: {
+        active: true,
+        resumed: false,
+        phase: 'plan',
+      },
+      memoryGrounding: {
+        isMemoryQuestion: false,
+        evidenceStrength: 'strong',
+        uncertaintyFirst: true,
+      },
+    },
+    recent: [],
+  },
+  telegramClient: {
+    monitoredChats: [monitoredChat],
+    runtimeStates: [runtimeState],
+  },
+  continuation: {
+    activeCount: 1,
+    active: [
+      {
+        conversationId: 'conv-1',
+        scopeKey: 'local:default',
+        userMessageId: 'msg-1',
+        phase: 'plan',
+        status: 'active',
+        updatedAt: '2026-03-31T10:05:00.000Z',
+        expiresAt: '2026-03-31T22:05:00.000Z',
+        budgetPressure: 'medium',
+      },
+    ],
+  },
+  qdrant: {
+    configured: true,
+    ready: false,
+    circuitOpen: false,
+    url: 'http://localhost:6333',
+    collectionName: 'argus_memory',
+    vectorSize: 1536,
+    consecutiveFailures: 1,
+  },
+  warnings: [
+    {
+      code: 'qdrant_not_ready',
+      severity: 'warning',
+      subject: 'qdrant',
+      message: 'Qdrant is configured but not ready for vector operations.',
+      action: 'Verify Qdrant availability.',
+    },
+  ],
+};
+
 function resetOpsStore() {
   useOpsStore.setState({
     logs: [],
@@ -250,6 +427,7 @@ function resetOpsStore() {
     monitorEvaluations: [],
     monitorAlerts: [],
     runtimeStates: [],
+    diagnostics: null,
     cronJobs: [],
     cronRuns: [],
     outboundAuditEvents: [],
@@ -272,16 +450,17 @@ describe('useOpsStore', () => {
   });
 
   it('loads runtime states together with monitored chats', async () => {
-    vi.mocked(opsApi.listTelegramClientRuntime).mockResolvedValue([runtimeState]);
-    vi.mocked(opsApi.listMonitoredChats).mockResolvedValue([monitoredChat]);
+    vi.mocked(opsApi.getDiagnostics).mockResolvedValue(diagnostics);
 
     await useOpsStore.getState().loadRuntimeStates();
 
     const state = useOpsStore.getState();
-    expect(opsApi.listTelegramClientRuntime).toHaveBeenCalledTimes(1);
-    expect(opsApi.listMonitoredChats).toHaveBeenCalledTimes(1);
+    expect(opsApi.listTelegramClientRuntime).not.toHaveBeenCalled();
+    expect(opsApi.listMonitoredChats).not.toHaveBeenCalled();
+    expect(opsApi.getDiagnostics).toHaveBeenCalledTimes(1);
     expect(state.runtimeStates).toEqual([runtimeState]);
     expect(state.monitoredChats).toEqual([monitoredChat]);
+    expect(state.diagnostics).toEqual(diagnostics);
     expect(state.error).toBeNull();
     expect(state.isLoading).toBe(false);
     expect(state.lastUpdatedAt).toEqual(expect.any(String));
@@ -302,8 +481,13 @@ describe('useOpsStore', () => {
     };
 
     vi.mocked(opsApi.updateMonitoredChat).mockResolvedValue(updatedChat);
-    vi.mocked(opsApi.listTelegramClientRuntime).mockResolvedValue([updatedRuntimeState]);
-    vi.mocked(opsApi.listMonitoredChats).mockResolvedValue([updatedChat]);
+    vi.mocked(opsApi.getDiagnostics).mockResolvedValue({
+      ...diagnostics,
+      telegramClient: {
+        monitoredChats: [updatedChat],
+        runtimeStates: [updatedRuntimeState],
+      },
+    });
 
     await expect(
       useOpsStore.getState().updateMonitoredChat('monitored-1', {
@@ -319,10 +503,17 @@ describe('useOpsStore', () => {
       cooldownSeconds: 120,
       systemNote: 'Updated note',
     });
-    expect(opsApi.listTelegramClientRuntime).toHaveBeenCalledTimes(1);
-    expect(opsApi.listMonitoredChats).toHaveBeenCalledTimes(1);
+    expect(opsApi.listTelegramClientRuntime).not.toHaveBeenCalled();
+    expect(opsApi.listMonitoredChats).not.toHaveBeenCalled();
+    expect(opsApi.getDiagnostics).toHaveBeenCalledTimes(1);
     expect(state.runtimeStates).toEqual([updatedRuntimeState]);
     expect(state.monitoredChats).toEqual([updatedChat]);
+    expect(state.diagnostics).toEqual(expect.objectContaining({
+      telegramClient: {
+        monitoredChats: [updatedChat],
+        runtimeStates: [updatedRuntimeState],
+      },
+    }));
     expect(state.error).toBeNull();
   });
 

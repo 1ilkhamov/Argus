@@ -229,4 +229,14 @@ describe('LlmService', () => {
       },
     ]);
   });
+
+  it('classifies context-window overflows as budget exhaustion', () => {
+    const service = new LlmService(createConfigService());
+
+    expect(service.classifyRuntimeError(new Error('maximum context length exceeded for this model'))).toEqual({
+      code: 'budget_exhausted',
+      message: 'maximum context length exceeded for this model',
+      retryable: false,
+    });
+  });
 });

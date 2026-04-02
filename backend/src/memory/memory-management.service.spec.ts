@@ -41,6 +41,13 @@ const createMemoryServiceMock = (overrides: Partial<Record<keyof MemoryService, 
     ...overrides,
   }) as unknown as MemoryService;
 
+const expectDebugMessagesToContain = (debugSpy: jest.SpyInstance, fragments: string[]): void => {
+  const messages = debugSpy.mock.calls.map(([message]) => String(message)).join('\n');
+  fragments.forEach((fragment) => {
+    expect(messages).toContain(fragment);
+  });
+};
+
 describe('MemoryManagementService', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
@@ -95,6 +102,10 @@ describe('MemoryManagementService', () => {
       interactionPreferences,
       userFacts: facts,
       episodicMemories: entries,
+      processingState: {
+        expectedVersion: 0,
+        lastProcessedUserMessage: undefined,
+      },
     });
   });
 
@@ -370,6 +381,8 @@ describe('MemoryManagementService', () => {
       episodicMemories: [
         expect.objectContaining({ id: '44444444-4444-4444-8444-444444444444', kind: 'constraint', summary: 'keep audit trail' }),
       ],
+      expectedVersion: undefined,
+      lastProcessedUserMessage: undefined,
     });
     expect(report.snapshot.userFacts).toEqual([expect.objectContaining({ key: 'project', value: 'Orbit Notes' })]);
     expect(report.snapshot.episodicMemories).toEqual([
@@ -416,10 +429,12 @@ describe('MemoryManagementService', () => {
         updatedAt: '2026-03-02T00:00:00.000Z',
       },
     ]);
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Managed fact mutation'));
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('"action":"forget"'));
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('name=Alex'));
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('project=Argus'));
+    expectDebugMessagesToContain(debugSpy, [
+      'Managed fact mutation',
+      '"action":"forget"',
+      'name{len=4, pinned=no}',
+      'project{len=5, pinned=no}',
+    ]);
   });
 
   it('pins an episodic memory entry and persists the updated state', async () => {
@@ -486,12 +501,20 @@ describe('MemoryManagementService', () => {
           expect.objectContaining({ key: 'project', value: 'Orbit Notes' }),
           expect.objectContaining({ key: 'goal', value: 'стабилизировать memory extraction' }),
         ]),
+        processingState: expect.objectContaining({
+          expectedVersion: 0,
+          lastProcessedUserMessage: expect.objectContaining({
+            messageId: 'msg-0',
+          }),
+        }),
       }),
     );
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Managed effective snapshot'));
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('"excludeLatestUserMessage":true'));
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('project=Orbit Notes'));
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('goal=стабилизировать memory extraction'));
+    expectDebugMessagesToContain(debugSpy, [
+      'Managed effective snapshot',
+      '"excludeLatestUserMessage":true',
+      'project{len=11, pinned=no}',
+      'goal{len=33, pinned=no}',
+    ]);
   });
 
   it('persists a normalized managed-memory snapshot through saveSnapshot', async () => {
@@ -541,15 +564,22 @@ describe('MemoryManagementService', () => {
       ],
     };
 
-    await expect(service.saveSnapshot(snapshot)).resolves.toEqual(snapshot);
+    await expect(service.saveSnapshot(snapshot)).resolves.toEqual({
+      ...snapshot,
+      processingState: undefined,
+    });
     expect(saveManagedMemoryState).toHaveBeenCalledWith({
       scopeKey: 'local:default',
       interactionPreferences: snapshot.interactionPreferences,
       userFacts: snapshot.userFacts,
       episodicMemories: snapshot.episodicMemories,
+      expectedVersion: undefined,
+      lastProcessedUserMessage: undefined,
     });
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Managed snapshot save'));
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('goal=внедрить universal response directives'));
+    expectDebugMessagesToContain(debugSpy, [
+      'Managed snapshot save',
+      'goal{len=38, pinned=no}',
+    ]);
   });
 
   it('blocks noisy replacements during saveSnapshot and restores persisted current state', async () => {
@@ -613,12 +643,15 @@ describe('MemoryManagementService', () => {
       interactionPreferences: undefined,
       userFacts: persistedFacts,
       episodicMemories: persistedEntries,
+      processingState: undefined,
     });
     expect(saveManagedMemoryState).toHaveBeenCalledWith({
       scopeKey: 'local:default',
       interactionPreferences: undefined,
       userFacts: persistedFacts,
       episodicMemories: persistedEntries,
+      expectedVersion: undefined,
+      lastProcessedUserMessage: undefined,
     });
   });
 });

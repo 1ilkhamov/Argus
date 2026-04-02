@@ -141,6 +141,104 @@ const createToolOrchestrator = () => ({
   streamWithTools: jest.fn(),
 });
 
+const createLlmService = (overrides?: Record<string, unknown>) => ({
+  complete: jest.fn(),
+  stream: jest.fn(),
+  getRuntimeProfile: jest.fn().mockReturnValue({
+    provider: 'openai',
+    model: 'test-model',
+    maxCompletionTokens: 2048,
+    contextWindowTokens: 128_000,
+    completionTimeoutMs: 45_000,
+    streamTimeoutMs: 90_000,
+  }),
+  classifyRuntimeError: jest.fn().mockReturnValue({ code: 'unknown', message: 'unknown', retryable: false }),
+  ...(overrides ?? {}),
+});
+
+const createPromptAssemblyService = (systemPromptBuilder: { build?: (...args: unknown[]) => string }) => ({
+  assemble: jest.fn().mockImplementation((input: { conversation: Conversation; mode: string; userProfile: AgentUserProfile; userProfileSource: string; userFacts: unknown[]; episodicMemories: unknown[]; recalledMemories: unknown[]; archiveEvidence: unknown[]; responseDirectives: ResponseDirectives }) => {
+    const systemContent = systemPromptBuilder.build
+      ? systemPromptBuilder.build(input.mode, input.userProfile, {
+          userProfileSource: input.userProfileSource,
+          userFacts: input.userFacts,
+          episodicMemories: input.episodicMemories,
+          recalledMemories: input.recalledMemories,
+          archiveEvidence: input.archiveEvidence,
+          ...(input.responseDirectives !== EMPTY_RESPONSE_DIRECTIVES ? { responseDirectives: input.responseDirectives } : {}),
+        })
+      : 'system prompt';
+    const historyMessages = input.conversation.getMessageHistory().map((message, index, messages) => ({
+      message,
+      estimatedTokens: 12,
+      locked: index === messages.length - 1,
+    }));
+    return {
+      systemSections: [{ id: 'base', title: 'Base', priority: 'critical', trimPolicy: 'never', source: 'directive', content: systemContent, estimatedTokens: 12 }],
+      historyMessages,
+      estimatedSystemTokens: 12,
+      estimatedHistoryTokens: historyMessages.length * 12,
+      estimatedTotalTokens: 12 + historyMessages.length * 12,
+    };
+  }),
+  appendSystemSection: jest.fn().mockImplementation((assembly: any, section: any) => ({
+    ...assembly,
+    systemSections: [...assembly.systemSections, { ...section, estimatedTokens: 12 }],
+    estimatedSystemTokens: assembly.estimatedSystemTokens + 12,
+    estimatedTotalTokens: assembly.estimatedTotalTokens + 12,
+  })),
+});
+
+const createPromptBudgetService = () => ({
+  budget: jest.fn().mockImplementation((input: { assembly: any; runtimeProfile: { provider: string; model: string; contextWindowTokens: number } }) => ({
+    messages: [
+      { role: 'system', content: input.assembly.systemSections.map((section: { content: string }) => section.content).join(' ') },
+      ...input.assembly.historyMessages.map((item: { message: LlmMessage }) => item.message),
+    ],
+    systemSections: input.assembly.systemSections,
+    historyMessages: input.assembly.historyMessages,
+    completionOptions: { maxTokens: 1024 },
+    budget: {
+      provider: input.runtimeProfile.provider,
+      model: input.runtimeProfile.model,
+      maxContextTokens: input.runtimeProfile.contextWindowTokens,
+      reservedCompletionTokens: 1024,
+      reservedRetryTokens: 0,
+      reservedToolRoundTokens: 0,
+      reservedStructuredFinishTokens: 128,
+      availablePromptTokens: input.runtimeProfile.contextWindowTokens - 1152,
+      estimatedInputTokens: input.assembly.estimatedTotalTokens,
+      finalInputTokens: input.assembly.estimatedTotalTokens,
+      trimmedSectionIds: [],
+      trimmedHistoryCount: 0,
+      compressedSectionIds: [],
+      budgetPressure: 'low',
+    },
+  })),
+});
+
+const createTurnExecutionPlannerService = () => ({
+  planTurn: jest.fn().mockReturnValue({
+    mode: 'standard',
+    reasonCodes: [],
+    shouldResumeFromCheckpoint: false,
+  }),
+});
+
+const createTurnResolutionDiagnosticsService = () => ({
+  record: jest.fn(),
+  getLatest: jest.fn().mockReturnValue(undefined),
+  listRecent: jest.fn().mockReturnValue([]),
+});
+
+const createExecutionStateService = () => ({
+  getActiveCheckpoint: jest.fn().mockResolvedValue(undefined),
+  saveCheckpoint: jest.fn().mockResolvedValue(undefined),
+  completeTurn: jest.fn().mockResolvedValue(undefined),
+  failTurn: jest.fn().mockResolvedValue(undefined),
+  expireStaleCheckpoints: jest.fn().mockResolvedValue(0),
+});
+
 const buildService = (overrides: {
   modeSelector?: unknown;
   userProfileService?: unknown;
@@ -157,32 +255,53 @@ const buildService = (overrides: {
   identityCaptureService?: unknown;
   identityRecallService?: unknown;
   selfModelService?: unknown;
+  promptAssemblyService?: unknown;
+  promptBudgetService?: unknown;
+  turnExecutionPlanner?: unknown;
+  turnResolutionDiagnostics?: unknown;
+  executionStateService?: unknown;
   contextTrimService?: unknown;
   toolOrchestrator?: unknown;
   repository?: unknown;
   sessionReflectionService?: unknown;
 }) =>
-  new ChatService(
-    (overrides.modeSelector ?? { selectMode: jest.fn().mockReturnValue('assistant') }) as ModeSelector,
-    (overrides.userProfileService ?? createUserProfileService()) as UserProfileService,
-    (overrides.memoryResolverService ?? createMemoryResolverService()) as MemoryResolverService,
-    (overrides.conversationalMemoryCommandService ?? createConversationalMemoryCommandService()) as ConversationalMemoryCommandService,
-    (overrides.responseDirectivesService ?? createResponseDirectivesService()) as ResponseDirectivesService,
-    (overrides.turnResponseValidator ?? createTurnResponseValidator()) as TurnResponseValidatorService,
-    (overrides.systemPromptBuilder ?? { build: jest.fn().mockReturnValue('system prompt') }) as SystemPromptBuilder,
-    (overrides.archiveChatRetrieverService ?? createArchiveChatRetrieverService()) as ArchiveChatRetrieverService,
-    (overrides.agentMetricsService ?? createAgentMetricsService()) as AgentMetricsService,
-    (overrides.llmService ?? { complete: jest.fn(), stream: jest.fn() }) as LlmService,
-    (overrides.autoRecallService ?? createAutoRecallService()) as AutoRecallService,
-    (overrides.autoCaptureService ?? createAutoCaptureService()) as AutoCaptureService,
-    (overrides.identityCaptureService ?? createIdentityCaptureService()) as IdentityCaptureService,
-    (overrides.identityRecallService ?? createIdentityRecallService()) as IdentityRecallService,
-    (overrides.selfModelService ?? createSelfModelService()) as SelfModelService,
-    (overrides.contextTrimService ?? { trimIfNeeded: jest.fn().mockImplementation((conv: Conversation) => Promise.resolve({ conversation: conv, result: { trimmed: false, messagesRemoved: 0, memoriesExtracted: 0, summaryInjected: false } })) }) as ContextTrimService,
-    (overrides.toolOrchestrator ?? createToolOrchestrator()) as ToolOrchestratorService,
-    overrides.repository as ChatRepository,
-    (overrides.sessionReflectionService ?? { reflect: jest.fn().mockResolvedValue(undefined), isAvailable: jest.fn().mockReturnValue(false) }) as any,
-  );
+  (() => {
+    const systemPromptBuilder = {
+      build: jest.fn().mockReturnValue('system prompt'),
+      getRuntimeState: jest.fn().mockReturnValue({ source: 'soul.default.yml' }),
+      ...(overrides.systemPromptBuilder as Record<string, unknown> | undefined),
+    } as {
+      build?: (...args: unknown[]) => string;
+      getRuntimeState?: () => { source: string };
+    };
+
+    return new ChatService(
+      (overrides.modeSelector ?? { selectMode: jest.fn().mockReturnValue('assistant') }) as ModeSelector,
+      (overrides.userProfileService ?? createUserProfileService()) as UserProfileService,
+      (overrides.memoryResolverService ?? createMemoryResolverService()) as MemoryResolverService,
+      (overrides.conversationalMemoryCommandService ?? createConversationalMemoryCommandService()) as ConversationalMemoryCommandService,
+      (overrides.responseDirectivesService ?? createResponseDirectivesService()) as ResponseDirectivesService,
+      (overrides.turnResponseValidator ?? createTurnResponseValidator()) as TurnResponseValidatorService,
+      systemPromptBuilder as SystemPromptBuilder,
+      (overrides.archiveChatRetrieverService ?? createArchiveChatRetrieverService()) as ArchiveChatRetrieverService,
+      (overrides.agentMetricsService ?? createAgentMetricsService()) as AgentMetricsService,
+      createLlmService(overrides.llmService as Record<string, unknown>) as unknown as LlmService,
+      (overrides.autoRecallService ?? createAutoRecallService()) as AutoRecallService,
+      (overrides.autoCaptureService ?? createAutoCaptureService()) as AutoCaptureService,
+      (overrides.identityCaptureService ?? createIdentityCaptureService()) as IdentityCaptureService,
+      (overrides.identityRecallService ?? createIdentityRecallService()) as IdentityRecallService,
+      (overrides.selfModelService ?? createSelfModelService()) as SelfModelService,
+      (overrides.promptAssemblyService ?? createPromptAssemblyService(systemPromptBuilder)) as any,
+      (overrides.promptBudgetService ?? createPromptBudgetService()) as any,
+      (overrides.turnExecutionPlanner ?? createTurnExecutionPlannerService()) as any,
+      (overrides.turnResolutionDiagnostics ?? createTurnResolutionDiagnosticsService()) as any,
+      (overrides.executionStateService ?? createExecutionStateService()) as any,
+      (overrides.contextTrimService ?? { trimIfNeeded: jest.fn().mockImplementation((conv: Conversation) => Promise.resolve({ conversation: conv, result: { trimmed: false, messagesRemoved: 0, memoriesExtracted: 0, summaryInjected: false } })) }) as ContextTrimService,
+      (overrides.toolOrchestrator ?? createToolOrchestrator()) as ToolOrchestratorService,
+      overrides.repository as ChatRepository,
+      (overrides.sessionReflectionService ?? { reflect: jest.fn().mockResolvedValue(undefined), isAvailable: jest.fn().mockReturnValue(false) }) as any,
+    );
+  })();
 
 describe('ChatService', () => {
   it('prepends the selected mode and resolved profile system prompt when sending a non-streaming message', async () => {
@@ -460,12 +579,6 @@ describe('ChatService', () => {
       expect.objectContaining({
         userProfileSource: 'recent_context',
         archiveEvidence: [],
-        memoryGrounding: expect.objectContaining({
-          isMemoryQuestion: true,
-          intent: 'name',
-          evidenceStrength: 'none',
-          shouldUseUncertaintyFirst: true,
-        }),
         responseDirectives: expect.objectContaining({
           hardLimits: expect.objectContaining({ uncertaintyFirst: true }),
         }),
@@ -483,6 +596,7 @@ describe('ChatService', () => {
         intent: 'name',
         evidenceStrength: 'none',
       }),
+      expect.objectContaining({ maxTokens: 1024 }),
     );
     expect(turnResponseValidator.completeWithValidation).not.toHaveBeenCalled();
     expect(result.assistantMessage.content).toBe('Я не знаю точно.');

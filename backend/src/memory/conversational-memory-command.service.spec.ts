@@ -85,6 +85,16 @@ const createMemoryManagementServiceMock = (
   return mock as unknown as MemoryManagementService;
 };
 
+const expectHandledResponseToContain = (
+  result: { handled: boolean; response?: string },
+  fragments: string[],
+): void => {
+  expect(result).toEqual(expect.objectContaining({ handled: true, response: expect.any(String) }));
+  fragments.forEach((fragment) => {
+    expect(result.response).toContain(fragment);
+  });
+};
+
 describe('ConversationalMemoryCommandService', () => {
   const snapshot: ManagedMemorySnapshot = {
     scopeKey: 'local:default',
@@ -122,11 +132,15 @@ describe('ConversationalMemoryCommandService', () => {
     const memoryManagementService = createMemoryManagementServiceMock(snapshot);
     const service = new ConversationalMemoryCommandService(memoryManagementService);
 
-    await expect(service.handle('Show memory snapshot')).resolves.toEqual({
-      handled: true,
-      response:
-        'Managed memory snapshot: userFacts=project=Argus. episodicMemories=goal=ship phase 8 controls; constraint=нельзя использовать vector database.',
-    });
+    const result = await service.handle('Show memory snapshot');
+
+    expectHandledResponseToContain(result, [
+      'Managed memory snapshot:',
+      'userFacts=project=Argus',
+      'episodicMemories=goal=ship phase 8 controls; constraint=нельзя использовать vector database',
+      'version=0',
+      'lastProcessedUserMessage=none',
+    ]);
 
     expect((memoryManagementService.getEffectiveSnapshot as jest.Mock)).not.toHaveBeenCalled();
     expect((memoryManagementService.saveSnapshot as jest.Mock)).not.toHaveBeenCalled();
@@ -150,11 +164,13 @@ describe('ConversationalMemoryCommandService', () => {
 
     const result = await service.handle('Forget my project');
 
-    expect(forgetUserFact).toHaveBeenCalledWith('project', 'local:default');
-    expect(result).toEqual({
-      handled: true,
-      response: 'I forgot your stored project fact (was "Argus").',
-    });
+    expect(forgetUserFact).toHaveBeenCalledWith('project', 'local:default', 'Argus');
+    expectHandledResponseToContain(result, [
+      'I forgot your stored project fact (was "Argus").',
+      'Found:',
+      'Changed:',
+      'Unchanged:',
+    ]);
   });
 
   it('keeps a trailing inspect request when a command-like message also asks to forget a mismatched older project', async () => {
@@ -181,11 +197,14 @@ describe('ConversationalMemoryCommandService', () => {
     );
 
     expect(forgetUserFact).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      handled: true,
-      response:
-        'Я не нашёл сохранённый факт о проекте со значением StressAtlasLegacy, который можно забыть.\nСнэпшот управляемой памяти: userFacts=project=StressHeliosOnly. episodicMemories=none.',
-    });
+    expectHandledResponseToContain(result, [
+      'Я не нашёл сохранённый факт о проекте со значением StressAtlasLegacy, который можно забыть.',
+      'Найдено: ничего.',
+      'Снэпшот управляемой памяти:',
+      'userFacts=project=StressHeliosOnly',
+      'episodicMemories=none',
+      'version=0',
+    ]);
   });
 
   it('keeps a trailing inspect request when the user says и потом покажи snapshot памяти', async () => {
@@ -206,11 +225,14 @@ describe('ConversationalMemoryCommandService', () => {
 
     const result = await service.handle('Забудь мой старый проект StressAtlasLegacy и потом покажи snapshot памяти.');
 
-    expect(result).toEqual({
-      handled: true,
-      response:
-        'Я не нашёл сохранённый факт о проекте со значением StressAtlasLegacy, который можно забыть.\nСнэпшот управляемой памяти: userFacts=project=StressHeliosOnly. episodicMemories=none.',
-    });
+    expectHandledResponseToContain(result, [
+      'Я не нашёл сохранённый факт о проекте со значением StressAtlasLegacy, который можно забыть.',
+      'Найдено: ничего.',
+      'Снэпшот управляемой памяти:',
+      'userFacts=project=StressHeliosOnly',
+      'episodicMemories=none',
+      'version=0',
+    ]);
   });
 
   it('routes current goal pin commands to the latest episodic goal memory', async () => {
@@ -225,10 +247,12 @@ describe('ConversationalMemoryCommandService', () => {
     const result = await service.handle('Pin my current goal');
 
     expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', true, 'local:default');
-    expect(result).toEqual({
-      handled: true,
-      response: 'I pinned the current goal memory: ship phase 8 controls.',
-    });
+    expectHandledResponseToContain(result, [
+      'I pinned the current goal memory: ship phase 8 controls.',
+      'Found:',
+      'Changed:',
+      'Unchanged:',
+    ]);
   });
 
   it('ignores normal chat messages', async () => {
@@ -288,11 +312,13 @@ describe('ConversationalMemoryCommandService', () => {
       true,
       'local:default',
     );
-    expect(result).toEqual({
-      handled: true,
-      response:
-        'Я закрепил текущую запись об цели: ship phase 8 controls.\nЯ закрепил текущую запись об ограничении: нельзя использовать vector database.',
-    });
+    expectHandledResponseToContain(result, [
+      'Я закрепил текущую запись об цели: ship phase 8 controls.',
+      'Я закрепил текущую запись об ограничении: нельзя использовать vector database.',
+      'Найдено:',
+      'Изменено:',
+      'Без изменений:',
+    ]);
   });
 
   it('pins the current goal from the effective pre-command snapshot instead of a stale persisted goal', async () => {
@@ -340,10 +366,12 @@ describe('ConversationalMemoryCommandService', () => {
     const result = await service.handle('Закрепи мою текущую цель.', conversation);
 
     expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('44444444-4444-4444-8444-444444444444', true, 'local:default');
-    expect(result).toEqual({
-      handled: true,
-      response: 'Я закрепил текущую запись об цели: стабилизировать command parsing и stream-resilience.',
-    });
+    expectHandledResponseToContain(result, [
+      'Я закрепил текущую запись об цели: стабилизировать command parsing и stream-resilience.',
+      'Найдено:',
+      'Изменено:',
+      'Без изменений:',
+    ]);
   });
 
   it('syncs the effective pre-command snapshot before pinning the current goal when persisted memory is stale', async () => {
@@ -377,11 +405,16 @@ describe('ConversationalMemoryCommandService', () => {
     const result = await service.handle('Закрепи мою текущую цель и покажи snapshot памяти.', conversation);
 
     expect((memoryManagementService.saveSnapshot as jest.Mock)).toHaveBeenCalledWith(effectiveSnapshot);
-    expect(result).toEqual({
-      handled: true,
-      response:
-        'Я закрепил текущую запись об цели: внедрить universal response directives и compliance retry.\nСнэпшот управляемой памяти: userFacts=project=Argus. episodicMemories=goal=внедрить universal response directives и compliance retry [pinned].',
-    });
+    expectHandledResponseToContain(result, [
+      'Я закрепил текущую запись об цели: внедрить universal response directives и compliance retry.',
+      'Найдено:',
+      'Изменено:',
+      'Снэпшот управляемой памяти:',
+      'userFacts=project=Argus',
+      'episodicMemories=goal=внедрить universal response directives и compliance retry [pinned]',
+      'version=0',
+      'lastProcessedUserMessage=none',
+    ]);
   });
 
   it('prefers the matching negative constraint over a stale positive variant when pinning the current constraint', async () => {
@@ -424,10 +457,12 @@ describe('ConversationalMemoryCommandService', () => {
     const result = await service.handle('Закрепи ограничение про запрет vector database.', conversation);
 
     expect(setEpisodicMemoryPinned).toHaveBeenCalledWith('55555555-5555-4555-8555-555555555555', true, 'local:default');
-    expect(result).toEqual({
-      handled: true,
-      response: 'Я закрепил текущую запись об ограничении: нельзя тащить vector database в обязательный контур.',
-    });
+    expectHandledResponseToContain(result, [
+      'Я закрепил текущую запись об ограничении: нельзя тащить vector database в обязательный контур.',
+      'Найдено:',
+      'Изменено:',
+      'Без изменений:',
+    ]);
   });
 
   it('does not forget a fact when the user explicitly refers to an older mismatched value', async () => {
@@ -453,9 +488,11 @@ describe('ConversationalMemoryCommandService', () => {
     const result = await service.handle('Забудь мой старый проект Atlas');
 
     expect(forgetUserFact).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      handled: true,
-      response: 'Я не нашёл сохранённый факт о проекте со значением Atlas, который можно забыть.',
-    });
+    expectHandledResponseToContain(result, [
+      'Я не нашёл сохранённый факт о проекте со значением Atlas, который можно забыть.',
+      'Найдено: ничего.',
+      'Изменено: ничего.',
+      'Без изменений: ничего.',
+    ]);
   });
- });
+});

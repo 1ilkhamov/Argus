@@ -17,7 +17,7 @@ import { Test } from '@nestjs/testing';
 import * as request from 'supertest';
 
 import { LlmService } from '../src/llm/llm.service';
-import type { LlmMessage } from '../src/llm/interfaces/llm.interface';
+import { getTextContent, type LlmMessage } from '../src/llm/interfaces/llm.interface';
 import { deriveScopeKey } from '../src/common/auth/scope-key';
 import { battleCorpus } from './battle-message-corpus';
 
@@ -39,13 +39,13 @@ const EMPTY_EXTRACTION_JSON = JSON.stringify({
 // ── LLM mock ─────────────────────────────────────────────────────────────────
 
 function mockLlmComplete(messages: LlmMessage[]): string {
-  const systemContent = messages[0]?.role === 'system' ? messages[0].content : '';
+  const systemContent = messages[0]?.role === 'system' ? getTextContent(messages[0].content) : '';
   // Extraction calls have a dedicated short system prompt
   if (systemContent.startsWith('You are a structured memory extractor')) {
     return EMPTY_EXTRACTION_JSON;
   }
   // Chat call: detect language from last user message and reply accordingly
-  const userContent = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const userContent = getTextContent([...messages].reverse().find((m) => m.role === 'user')?.content ?? '');
   const cyrillicCount = userContent.match(/[А-Яа-яЁё]/g)?.length ?? 0;
   const latinCount = userContent.match(/[A-Za-z]/g)?.length ?? 0;
   return cyrillicCount > latinCount ? 'Принял.' : 'Got it.';

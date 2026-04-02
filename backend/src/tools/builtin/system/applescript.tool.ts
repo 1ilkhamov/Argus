@@ -59,11 +59,20 @@ const BLOCKED_JXA_PATTERNS: RegExp[] = [
 
 // ─── Tool ────────────────────────────────────────────────────────────────────
 
+export interface AppleScriptRuntimeState {
+  platform: NodeJS.Platform;
+  supported: boolean;
+  enabled: boolean;
+  registered: boolean;
+  status: 'available' | 'disabled' | 'unsupported_os';
+}
+
 @Injectable()
 export class AppleScriptTool implements Tool, OnModuleInit {
   private readonly logger = new Logger(AppleScriptTool.name);
   private readonly enabled: boolean;
   private readonly timeoutMs: number;
+  private registered = false;
 
   readonly definition: ToolDefinition = {
     name: 'applescript',
@@ -113,17 +122,30 @@ export class AppleScriptTool implements Tool, OnModuleInit {
 
   onModuleInit(): void {
     if (os.platform() !== 'darwin') {
-      this.logger.warn('applescript tool is only available on macOS — skipping registration');
+      this.logger.log(`applescript tool unavailable on ${os.platform()} — expected non-macOS capability gap`);
       return;
     }
 
     if (!this.enabled) {
-      this.logger.warn('applescript tool is disabled via config');
+      this.logger.log('applescript tool is disabled via config');
       return;
     }
 
     this.registry.register(this);
+    this.registered = true;
     this.logger.log('applescript tool registered');
+  }
+
+  getRuntimeState(): AppleScriptRuntimeState {
+    const platform = os.platform();
+    const supported = platform === 'darwin';
+    return {
+      platform,
+      supported,
+      enabled: this.enabled,
+      registered: this.registered,
+      status: !supported ? 'unsupported_os' : this.enabled ? 'available' : 'disabled',
+    };
   }
 
   async execute(args: Record<string, unknown>): Promise<string> {

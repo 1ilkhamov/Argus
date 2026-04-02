@@ -29,6 +29,6 @@ import { TelegramService } from './bot/telegram.service';
     RateLimitGuard,
     RateLimitService,
   ],
-  exports: [TelegramService],
+  exports: [TelegramAuthService, TelegramService],
 })
 export class TelegramModule {}

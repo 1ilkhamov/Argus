@@ -59,6 +59,13 @@ const createMemoryServiceMock = (overrides: Partial<Record<keyof MemoryService, 
     ...overrides,
   }) as unknown as MemoryService;
 
+const expectDebugMessagesToContain = (debugSpy: jest.SpyInstance, fragments: string[]): void => {
+  const messages = debugSpy.mock.calls.map(([message]) => String(message)).join('\n');
+  fragments.forEach((fragment) => {
+    expect(messages).toContain(fragment);
+  });
+};
+
 describe('MemoryResolverService', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
@@ -232,21 +239,13 @@ describe('MemoryResolverService', () => {
 
     await service.resolveUserFacts(conversation);
 
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('User facts pipeline'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('persisted_facts_and_recent_context'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('project=Legacy project'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('project=Orbit Notes'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('role=platform engineer'),
-    );
+    expectDebugMessagesToContain(debugSpy, [
+      'User facts pipeline',
+      'persisted_facts_and_recent_context',
+      'project{len=14, pinned=no}',
+      'project{len=11, pinned=no}',
+      'role{len=17, pinned=no}',
+    ]);
   });
 
   it('resolves episodic memories and selects relevant prior context', async () => {
@@ -351,21 +350,13 @@ describe('MemoryResolverService', () => {
 
     await service.resolveEpisodicMemory(conversation);
 
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Episodic memory pipeline'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('persisted_memories_and_recent_context'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('goal=ship old memory flow'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('goal=ship stable memory flow'),
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('constraint=нельзя делать vector database обязательным'),
-    );
+    expectDebugMessagesToContain(debugSpy, [
+      'Episodic memory pipeline',
+      'persisted_memories_and_recent_context',
+      'goal{len=20, pinned=no, salience=0.95}',
+      'goal{len=23, pinned=no, salience=0.95}',
+      'constraint{len=42, pinned=no, salience=0.90}',
+    ]);
   });
 
   it('stores normalized episodic memory but returns only prompt-visible relevant entries after lifecycle filtering', async () => {

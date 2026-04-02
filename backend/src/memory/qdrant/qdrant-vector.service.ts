@@ -24,6 +24,16 @@ type QdrantCollectionInfo = {
   };
 };
 
+export interface QdrantRuntimeState {
+  configured: boolean;
+  ready: boolean;
+  circuitOpen: boolean;
+  url?: string;
+  collectionName?: string;
+  vectorSize?: number;
+  consecutiveFailures: number;
+}
+
 @Injectable()
 export class QdrantVectorService implements OnModuleInit {
   private readonly logger = new Logger(QdrantVectorService.name);
@@ -71,6 +81,22 @@ export class QdrantVectorService implements OnModuleInit {
 
   isConfigured(): boolean {
     return Boolean(this.config);
+  }
+
+  getRuntimeState(): QdrantRuntimeState {
+    return {
+      configured: Boolean(this.config),
+      ready: this.ready,
+      circuitOpen: this.isCircuitOpen(),
+      ...(this.config
+        ? {
+            url: this.config.url,
+            collectionName: this.config.collectionName,
+            vectorSize: this.config.vectorSize,
+          }
+        : {}),
+      consecutiveFailures: this.consecutiveFailures,
+    };
   }
 
   // ─── Write ──────────────────────────────────────────────────────────────

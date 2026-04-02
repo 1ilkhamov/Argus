@@ -110,6 +110,30 @@ export class PostgresConnectionService implements OnModuleInit, OnModuleDestroy 
       CREATE INDEX IF NOT EXISTS idx_messages_content_fts
       ON messages USING GIN (to_tsvector('simple', content));
 
+      CREATE TABLE IF NOT EXISTS turn_execution_states (
+        conversation_id TEXT NOT NULL,
+        scope_key TEXT NOT NULL DEFAULT 'local:default',
+        user_message_id TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        status TEXT NOT NULL,
+        working_summary TEXT NOT NULL,
+        remaining_steps_json TEXT NOT NULL,
+        partial_response TEXT,
+        last_error_code TEXT,
+        budget_json TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (conversation_id, user_message_id, scope_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_turn_execution_states_active
+      ON turn_execution_states (conversation_id, scope_key, status, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_turn_execution_states_expires_at
+      ON turn_execution_states (expires_at);
+
       CREATE TABLE IF NOT EXISTS agent_user_profiles (
         profile_key TEXT PRIMARY KEY,
         preferred_language TEXT NOT NULL,

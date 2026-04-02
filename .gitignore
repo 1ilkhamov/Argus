@@ -14,7 +14,6 @@ build/
 backend/data/
 backend/tmp/
 bin/
-plans/
 !cli/bin/
 !cli/bin/**
 
@@ -35,6 +34,9 @@ npm-debug.log*
 
 # Coverage
 coverage/
+
+# Local plans
+plans/
 
 # Misc
 *.tsbuildinfo

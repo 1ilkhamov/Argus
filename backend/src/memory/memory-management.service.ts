@@ -63,10 +63,11 @@ export class MemoryManagementService {
   ) {}
 
   async getSnapshot(scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE): Promise<ManagedMemorySnapshot> {
-    const [interactionPreferences, userFacts, episodicMemories] = await Promise.all([
+    const [interactionPreferences, userFacts, episodicMemories, metadata] = await Promise.all([
       this.memoryService.getInteractionPreferences(scopeKey),
       this.memoryService.getUserProfileFacts(scopeKey),
       this.memoryService.getEpisodicMemoryEntries(scopeKey),
+      this.memoryService.getManagedMemoryStateMetadata(scopeKey),
     ]);
 
     this.logger.debug(
@@ -83,6 +84,10 @@ export class MemoryManagementService {
       interactionPreferences,
       userFacts,
       episodicMemories,
+      processingState: {
+        expectedVersion: metadata.version,
+        lastProcessedUserMessage: metadata.lastProcessedUserMessage,
+      },
     };
   }
 
@@ -100,6 +105,7 @@ export class MemoryManagementService {
         ...snapshot,
         userFacts: this.userFactsLifecycleService.prepareFactsForStorage(snapshot.userFacts),
         episodicMemories: this.episodicMemoryLifecycleService.prepareEntriesForStorage(snapshot.episodicMemories),
+        processingState: snapshot.processingState,
       };
 
       this.logger.debug(
@@ -265,18 +271,34 @@ export class MemoryManagementService {
         scopeKey,
         dryRun,
         summary: report.summary,
-        changes: changes.map((change) => `${change.target}:${change.action}:${change.before}`),
+        changes: changes.map((change) => `${change.target}:${change.action}:${change.reasons.join('|')}`),
       })}`,
     );
 
     return report;
   }
 
-  async forgetUserFact(key: UserProfileFactKey, scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE): Promise<boolean> {
+  async forgetUserFact(
+    key: UserProfileFactKey,
+    scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
+    expectedValue?: string,
+  ): Promise<boolean> {
     const facts = await this.memoryService.getUserProfileFacts(scopeKey);
-    const nextFacts = facts.filter((fact) => fact.key !== key);
+    const nextFacts = facts.filter(
+      (fact) =>
+        fact.key !== key ||
+        (expectedValue !== undefined && this.normalizeFactValue(fact.value) !== this.normalizeFactValue(expectedValue)),
+    );
     if (nextFacts.length === facts.length) {
-      this.logger.debug(`Managed fact mutation ${JSON.stringify({ action: 'forget', scopeKey, key, status: 'not_found' })}`);
+      this.logger.debug(
+        `Managed fact mutation ${JSON.stringify({
+          action: 'forget',
+          scopeKey,
+          key,
+          status: 'not_found',
+          ...(expectedValue !== undefined ? { targetValueLength: expectedValue.length } : {}),
+        })}`,
+      );
       return false;
     }
 
@@ -288,6 +310,7 @@ export class MemoryManagementService {
         scopeKey,
         key,
         status: 'deleted',
+        ...(expectedValue !== undefined ? { targetValueLength: expectedValue.length } : {}),
         before: this.summarizeFacts(facts),
         after: this.summarizeFacts(normalizedFacts),
       })}`,
@@ -299,16 +322,22 @@ export class MemoryManagementService {
     key: UserProfileFactKey,
     pinned: boolean,
     scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
+    expectedValue?: string,
   ): Promise<UserProfileFact | undefined> {
     const facts = await this.memoryService.getUserProfileFacts(scopeKey);
     const updatedAt = new Date().toISOString();
     let found = false;
+    let matchedValue: string | undefined;
     const nextFacts = facts.map((fact) => {
-      if (fact.key !== key) {
+      if (
+        fact.key !== key ||
+        (expectedValue !== undefined && this.normalizeFactValue(fact.value) !== this.normalizeFactValue(expectedValue))
+      ) {
         return fact;
       }
 
       found = true;
+      matchedValue = fact.value;
       return {
         ...fact,
         pinned: pinned || undefined,
@@ -323,6 +352,7 @@ export class MemoryManagementService {
           scopeKey,
           key,
           status: 'not_found',
+          ...(expectedValue !== undefined ? { targetValueLength: expectedValue.length } : {}),
         })}`,
       );
       return undefined;
@@ -336,10 +366,13 @@ export class MemoryManagementService {
         scopeKey,
         key,
         status: 'updated',
+        ...(expectedValue !== undefined ? { targetValueLength: expectedValue.length } : {}),
         after: this.summarizeFacts(normalizedFacts),
       })}`,
     );
-    return normalizedFacts.find((fact) => fact.key === key);
+    return normalizedFacts.find(
+      (fact) => fact.key === key && (matchedValue === undefined || this.normalizeFactValue(fact.value) === this.normalizeFactValue(matchedValue)),
+    );
   }
 
   async forgetEpisodicMemory(entryId: string, scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE): Promise<boolean> {
@@ -415,12 +448,12 @@ export class MemoryManagementService {
   }
 
   private summarizeFacts(facts: UserProfileFact[], max = 6): string[] {
-    const items = facts.map((fact) => `${fact.key}=${fact.value}${fact.pinned ? ' [pinned]' : ''}`);
+    const items = facts.map((fact) => `${fact.key}{len=${fact.value.length}, pinned=${fact.pinned ? 'yes' : 'no'}}`);
     return items.length <= max ? items : [...items.slice(0, max), `+${items.length - max} more`];
   }
 
   private summarizeEntries(entries: EpisodicMemoryEntry[], max = 6): string[] {
-    const items = entries.map((entry) => `${entry.kind}=${entry.summary}${entry.pinned ? ' [pinned]' : ''}`);
+    const items = entries.map((entry) => `${entry.kind}{len=${entry.summary.length}, pinned=${entry.pinned ? 'yes' : 'no'}}`);
     return items.length <= max ? items : [...items.slice(0, max), `+${items.length - max} more`];
   }
 
@@ -466,8 +499,8 @@ export class MemoryManagementService {
       `Managed snapshot audit ${JSON.stringify({
         scopeKey: report.scopeKey,
         summary: report.summary,
-        flaggedUserFacts: report.userFacts.map((item) => `${item.fact.key}=${item.fact.value}`),
-        flaggedEpisodicMemories: report.episodicMemories.map((item) => `${item.entry.kind}=${item.entry.summary}`),
+        flaggedUserFacts: report.userFacts.map((item) => `${item.fact.key}{issues=${item.issues.length}, pinned=${item.fact.pinned ? 'yes' : 'no'}}`),
+        flaggedEpisodicMemories: report.episodicMemories.map((item) => `${item.entry.kind}{issues=${item.issues.length}, pinned=${item.entry.pinned ? 'yes' : 'no'}}`),
       })}`,
     );
   }
@@ -719,6 +752,10 @@ export class MemoryManagementService {
 
   private formatFactForComparison(fact: UserProfileFact): string {
     return `${fact.key}:${fact.value}:${fact.pinned ? 'pinned' : 'unpinned'}`;
+  }
+
+  private normalizeFactValue(value: string): string {
+    return value.toLocaleLowerCase().replace(/\s+/g, ' ').trim();
   }
 
   private formatFact(fact: UserProfileFact): string {

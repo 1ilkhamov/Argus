@@ -197,6 +197,27 @@ Boot-time repository initialization applies additive/idempotent migrations for 0
 
 See `docs/release-0.2.0.md` for the exact rollout, smoke-check, and rollback procedure.
 
+## Runtime hardening and diagnostics in 0.2.3
+
+0.2.3 adds a stricter runtime contract for startup hygiene, prompt budgeting, continuation state, and operator diagnostics.
+
+Operationally important points:
+
+- `/api/ops/diagnostics` is now the authoritative operator surface for runtime health, LLM profile, soul source metadata, managed-memory processing state, prompt diagnostics, continuation checkpoints, Qdrant readiness, and actionable warnings
+- `SOUL_CONFIG_PATH` is now operationally visible through `source`, `sourceKind`, and `configuredPath`
+- `TELEGRAM_ENABLED` is the first gate for Telegram inbound auth and bot lifecycle behavior
+- AppleScript exposes capability state (`available`, `disabled`, `unsupported_os`) instead of relying on noisy unsupported-host warnings
+- prompt trimming, compression, and high budget pressure are expected runtime signals and should be reviewed in the ops runtime tab instead of treated as hidden implementation detail
+- continuation checkpoints are release-critical execution state and must survive the selected `storage.driver`
+
+Before rollout or rollback for 0.2.3, preserve:
+
+- `STORAGE_MEMORY_DB_FILE` and its sidecars for ops/runtime SQLite state
+- the active `SOUL_CONFIG_PATH` target, if used
+- the selected chat/memory/execution-state storage backend for the configured `STORAGE_DRIVER`
+
+See `docs/release-0.2.3.md` for the exact rollout, smoke-check, and rollback procedure.
+
 ## Docker Compose
 
 `docker-compose.yml` defines these services:

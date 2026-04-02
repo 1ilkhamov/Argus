@@ -18,6 +18,7 @@ import {
   buildFactPinNotFoundNote,
   buildFactPinnedNote,
   buildFactUnpinnedNote,
+  buildForgetEpisodicDeletedNote,
   buildForgetFactByValueDeletedNote,
   buildForgetFactDeletedNote,
   buildForgetFactNotFoundNote,
@@ -37,7 +38,43 @@ export interface ConversationalMemoryCommandResult {
 }
 
 type FactAction = 'forget_fact' | 'pin_fact' | 'unpin_fact';
-type EpisodicAction = 'pin_episodic' | 'unpin_episodic';
+type EpisodicAction = 'forget_episodic' | 'pin_episodic' | 'unpin_episodic';
+type CandidateSource = 'managed' | 'store';
+type FactMutationCandidate = {
+  source: CandidateSource;
+  key: UserProfileFactKey;
+  value: string;
+  pinned?: boolean;
+  storeEntryId?: string;
+};
+type EpisodicMutationCandidate = {
+  source: CandidateSource;
+  id?: string;
+  kind: EpisodicMemoryKind;
+  summary: string;
+  updatedAt: string;
+  pinned?: boolean;
+  overlap: number;
+  polarityScore: number;
+  storeEntryId?: string;
+};
+type CandidateResolution<T> =
+  | {
+      status: 'resolved';
+      strategy: 'exact' | 'scoped';
+      target: T;
+      candidates: T[];
+    }
+  | {
+      status: 'ambiguous';
+      strategy: 'exact' | 'scoped';
+      candidates: T[];
+    }
+  | {
+      status: 'not_found';
+      strategy: 'exact' | 'scoped';
+      candidates: T[];
+    };
 type ParsedMemoryCommand =
   | {
       action: 'inspect';
@@ -222,12 +259,8 @@ export class ConversationalMemoryCommandService {
   ): ParsedMemoryCommand | undefined {
     const episodicKind = this.extractEpisodicKind(clause);
     if (episodicKind) {
-      if (action === 'forget_fact') {
-        return undefined;
-      }
-
       return {
-        action: action === 'pin' ? 'pin_episodic' : 'unpin_episodic',
+        action: action === 'forget_fact' ? 'forget_episodic' : action === 'pin' ? 'pin_episodic' : 'unpin_episodic',
         kind: episodicKind,
         selectorText: clause,
       };
@@ -249,7 +282,7 @@ export class ConversationalMemoryCommandService {
     return {
       action: action === 'pin' ? 'pin_fact' : action === 'unpin' ? 'unpin_fact' : 'forget_fact',
       key: factKey,
-      expectedValue: action === 'forget_fact' ? this.extractExpectedFactValue(clause, factKey) : undefined,
+      expectedValue: this.extractExpectedFactValue(clause, factKey),
     };
   }
 
@@ -288,19 +321,34 @@ export class ConversationalMemoryCommandService {
   }
 
   private extractExpectedFactValue(content: string, key: UserProfileFactKey): string | undefined {
-    if (key !== 'project') {
-      return undefined;
+    const quotedMatch = /["“«](.+?)["”»]/u.exec(content);
+    if (quotedMatch?.[1]) {
+      const quoted = this.normalizeTargetValue(quotedMatch[1]);
+      if (quoted) {
+        return quoted;
+      }
     }
 
-    const match = /(?:\bproject\b|проект)\s+([^,.!?;:]+(?:\s+[^,.!?;:]+){0,5})/i.exec(content);
+    const keyPattern =
+      key === 'name'
+        ? '(?:\\bname\\b|имя)'
+        : key === 'role'
+          ? '(?:\\brole\\b|роль)'
+          : key === 'goal'
+            ? '(?:\\bgoal\\b|цель)'
+            : '(?:\\bproject\\b|проект)';
+
+    const match = new RegExp(`${keyPattern}\\s+([^,.!?;:]+(?:\\s+[^,.!?;:]+){0,5})`, 'iu').exec(content);
     const normalized = this.normalizeTargetValue(match?.[1]);
-    return normalized && normalized !== 'project' ? normalized : undefined;
+    return normalized && normalized !== 'project' && normalized !== 'name' && normalized !== 'role' && normalized !== 'goal'
+      ? normalized
+      : undefined;
   }
 
   private normalizeTargetValue(value: string | undefined): string | undefined {
     const normalized = value
       ?.replace(/^(?:named|called|fact|memory|мой|моя|моё|мои|my|the|old|new|стар(?:ый|ое|ую)?|нов(?:ый|ое|ую)?|stored|current|текущ(?:ий|ая|ее|ую))\s+/iu, '')
-      .replace(/^(?:project|проект)\s+/iu, '')
+      .replace(/^(?:project|проект|name|имя|role|роль|goal|цель)\s+/iu, '')
       .replace(/\s*,\s*(?:не трогай|don't touch|но|but)\b.*$/iu, '')
       .replace(
         /\s+(?:and|и)\s+(?:(?:please|then|after that|afterwards|later|now|just)\s+|(?:пожалуйста|тогда|потом|затем|после этого|теперь|отдельно)\s+)*(?:show|покажи)\b.*$/iu,
@@ -321,7 +369,7 @@ export class ConversationalMemoryCommandService {
       return `${command.action}:${command.key}:${command.expectedValue ?? ''}`;
     }
 
-    return `${command.action}:${command.kind}`;
+    return `${command.action}:${command.kind}:${this.normalizeForComparison(command.selectorText)}`;
   }
 
   private isFactCommand(
@@ -333,6 +381,16 @@ export class ConversationalMemoryCommandService {
   private async buildSnapshotResponse(language: CommandResponseLanguage, scopeKey: string): Promise<string> {
     const snapshot = await this.memoryManagementService.getSnapshot(scopeKey);
     const storeEntries = this.isSnapshotEmpty(snapshot) ? await this.loadStoreEntries(scopeKey) : [];
+    const interactionPreferences = snapshot.interactionPreferences
+      ? [
+          `language=${snapshot.interactionPreferences.communication.preferredLanguage}`,
+          `tone=${snapshot.interactionPreferences.communication.tone}`,
+          `detail=${snapshot.interactionPreferences.communication.detail}`,
+          `structure=${snapshot.interactionPreferences.communication.structure}`,
+          `pushback=${snapshot.interactionPreferences.interaction.allowPushback ? 'yes' : 'no'}`,
+          `proactive=${snapshot.interactionPreferences.interaction.allowProactiveSuggestions ? 'yes' : 'no'}`,
+        ].join(', ')
+      : 'none';
     const facts =
       snapshot.userFacts.length > 0
         ? snapshot.userFacts
@@ -345,9 +403,11 @@ export class ConversationalMemoryCommandService {
             .map((entry) => `${entry.kind}=${entry.summary}${entry.pinned ? ' [pinned]' : ''}`)
             .join('; ')
         : this.formatStoreEpisodicMemories(storeEntries);
+    const version = snapshot.processingState?.expectedVersion ?? 0;
+    const lastProcessedUserMessage = snapshot.processingState?.lastProcessedUserMessage?.messageId ?? 'none';
 
     const prefix = language === 'ru' ? 'Снэпшот управляемой памяти' : 'Managed memory snapshot';
-    return `${prefix}: userFacts=${facts}. episodicMemories=${episodicMemories}.`;
+    return `${prefix}: interactionPreferences=${interactionPreferences}. userFacts=${facts}. episodicMemories=${episodicMemories}. version=${version}. lastProcessedUserMessage=${lastProcessedUserMessage}.`;
   }
 
   private async executeFactCommand(
@@ -358,81 +418,157 @@ export class ConversationalMemoryCommandService {
     language: CommandResponseLanguage = 'en',
     scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
   ): Promise<string> {
-    const targetFact = snapshot?.userFacts.find((fact) => fact.key === key);
-    const fallbackFact = !targetFact ? await this.findStoreFactEntry(scopeKey, key, expectedValue) : undefined;
+    const resolution = await this.resolveFactCandidate(key, expectedValue, snapshot, scopeKey);
+    if (resolution.status === 'ambiguous') {
+      const candidates = resolution.candidates.map((candidate) => this.describeFactCandidate(candidate));
+      return this.composeMutationResponse(
+        language,
+        this.buildFactAmbiguousNote(language, key, expectedValue),
+        candidates,
+        [],
+        candidates,
+        this.buildAmbiguityReason(language, resolution.strategy),
+      );
+    }
 
     if (action === 'forget_fact') {
-      if (!targetFact && !fallbackFact) {
-        return expectedValue
-          ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
-          : buildForgetFactNotFoundNote(language, key);
-      }
-
-      if (
-        targetFact &&
-        expectedValue &&
-        this.normalizeForComparison(targetFact.value) !== this.normalizeForComparison(expectedValue)
-      ) {
-        return buildForgetFactValueNotFoundNote(language, key, expectedValue);
-      }
-
-      if (targetFact) {
-        const deleted = await this.memoryManagementService.forgetUserFact(key, scopeKey);
-        await this.deleteStoreFact(scopeKey, key, expectedValue ?? targetFact.value);
-        if (!deleted) {
-          return expectedValue
+      if (resolution.status === 'not_found') {
+        return this.composeMutationResponse(
+          language,
+          expectedValue
             ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
-            : buildForgetFactNotFoundNote(language, key);
+            : buildForgetFactNotFoundNote(language, key),
+          [],
+          [],
+          [],
+        );
+      }
+
+      const targetFact = resolution.target;
+      if (targetFact.source === 'managed') {
+        const deleted = await this.memoryManagementService.forgetUserFact(key, scopeKey, targetFact.value);
+        await this.deleteStoreFactByExactValue(scopeKey, key, targetFact.value);
+        if (!deleted) {
+          return this.composeMutationResponse(
+            language,
+            expectedValue
+              ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
+              : buildForgetFactNotFoundNote(language, key),
+            [],
+            [],
+            [],
+          );
         }
 
-        return expectedValue
-          ? buildForgetFactByValueDeletedNote(language, key, expectedValue)
-          : buildForgetFactDeletedNote(language, key, targetFact.value);
+        return this.composeMutationResponse(
+          language,
+          expectedValue
+            ? buildForgetFactByValueDeletedNote(language, key, expectedValue)
+            : buildForgetFactDeletedNote(language, key, targetFact.value),
+          [this.describeFactCandidate(targetFact)],
+          [this.describeFactCandidate(targetFact)],
+          [],
+        );
       }
 
-      if (!fallbackFact || !this.memoryStoreService) {
-        return expectedValue
-          ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
-          : buildForgetFactNotFoundNote(language, key);
+      if (!this.memoryStoreService || !targetFact.storeEntryId) {
+        return this.composeMutationResponse(
+          language,
+          expectedValue
+            ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
+            : buildForgetFactNotFoundNote(language, key),
+          [],
+          [],
+          [],
+        );
       }
 
-      const deleted = await this.memoryStoreService.delete(fallbackFact.id);
+      const deleted = await this.memoryStoreService.delete(targetFact.storeEntryId);
       if (!deleted) {
-        return expectedValue
-          ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
-          : buildForgetFactNotFoundNote(language, key);
+        return this.composeMutationResponse(
+          language,
+          expectedValue
+            ? buildForgetFactValueNotFoundNote(language, key, expectedValue)
+            : buildForgetFactNotFoundNote(language, key),
+          [],
+          [],
+          [],
+        );
       }
 
-      return expectedValue
-        ? buildForgetFactByValueDeletedNote(language, key, expectedValue)
-        : buildForgetFactDeletedNote(language, key, fallbackFact.content);
+      return this.composeMutationResponse(
+        language,
+        expectedValue
+          ? buildForgetFactByValueDeletedNote(language, key, expectedValue)
+          : buildForgetFactDeletedNote(language, key, targetFact.value),
+        [this.describeFactCandidate(targetFact)],
+        [this.describeFactCandidate(targetFact)],
+        [],
+      );
     }
 
     const pinned = action === 'pin_fact';
-    if (targetFact) {
-      const fact = await this.memoryManagementService.setUserFactPinned(key, pinned, scopeKey);
-      await this.setStoreFactPinned(scopeKey, key, targetFact.value, pinned);
+    if (resolution.status === 'not_found') {
+      return this.composeMutationResponse(
+        language,
+        buildFactPinNotFoundNote(language, key, pinned),
+        [],
+        [],
+        [],
+      );
+    }
+
+    const targetFact = resolution.target;
+    if (targetFact.source === 'managed') {
+      const fact = await this.memoryManagementService.setUserFactPinned(key, pinned, scopeKey, targetFact.value);
+      await this.setStoreFactPinnedByExactValue(scopeKey, key, targetFact.value, pinned);
       if (!fact) {
-        return buildFactPinNotFoundNote(language, key, pinned);
+        return this.composeMutationResponse(
+          language,
+          buildFactPinNotFoundNote(language, key, pinned),
+          [],
+          [],
+          [],
+        );
       }
 
-      return pinned
-        ? buildFactPinnedNote(language, key, fact.value)
-        : buildFactUnpinnedNote(language, key, fact.value);
+      return this.composeMutationResponse(
+        language,
+        pinned ? buildFactPinnedNote(language, key, fact.value) : buildFactUnpinnedNote(language, key, fact.value),
+        [this.describeFactCandidate(targetFact)],
+        [this.describeFactCandidate({ ...targetFact, value: fact.value, pinned: fact.pinned })],
+        [],
+      );
     }
 
-    if (!fallbackFact || !this.memoryStoreService) {
-      return buildFactPinNotFoundNote(language, key, pinned);
+    if (!this.memoryStoreService || !targetFact.storeEntryId) {
+      return this.composeMutationResponse(
+        language,
+        buildFactPinNotFoundNote(language, key, pinned),
+        [],
+        [],
+        [],
+      );
     }
 
-    const updated = await this.memoryStoreService.update(fallbackFact.id, { pinned });
+    const updated = await this.memoryStoreService.update(targetFact.storeEntryId, { pinned });
     if (!updated) {
-      return buildFactPinNotFoundNote(language, key, pinned);
+      return this.composeMutationResponse(
+        language,
+        buildFactPinNotFoundNote(language, key, pinned),
+        [],
+        [],
+        [],
+      );
     }
 
-    return pinned
-      ? buildFactPinnedNote(language, key, updated.content)
-      : buildFactUnpinnedNote(language, key, updated.content);
+    return this.composeMutationResponse(
+      language,
+      pinned ? buildFactPinnedNote(language, key, updated.content) : buildFactUnpinnedNote(language, key, updated.content),
+      [this.describeFactCandidate(targetFact)],
+      [this.describeFactCandidate({ ...targetFact, value: updated.content, pinned: updated.pinned })],
+      [],
+    );
   }
 
   private async executeEpisodicCommand(
@@ -444,32 +580,136 @@ export class ConversationalMemoryCommandService {
     language: CommandResponseLanguage = 'en',
     scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
   ): Promise<string> {
-    const target = this.pickRelevantEntryByKind(snapshot?.episodicMemories ?? [], kind, conversation, selectorText);
-    const pinned = action === 'pin_episodic';
-    if (target) {
-      const updated = await this.memoryManagementService.setEpisodicMemoryPinned(target.id, pinned, scopeKey);
-      await this.setStoreEpisodicPinned(scopeKey, kind, conversation, selectorText, pinned, target.summary);
-      if (updated) {
-        return pinned
-          ? buildEpisodicPinnedNote(language, kind, updated.summary)
-          : buildEpisodicUnpinnedNote(language, kind, updated.summary);
+    const resolution = await this.resolveEpisodicCandidate(kind, conversation, selectorText, snapshot, scopeKey);
+    if (resolution.status === 'ambiguous') {
+      const candidates = resolution.candidates.map((candidate) => this.describeEpisodicCandidate(candidate));
+      return this.composeMutationResponse(
+        language,
+        this.buildEpisodicAmbiguousNote(language, kind),
+        candidates,
+        [],
+        candidates,
+        this.buildAmbiguityReason(language, resolution.strategy),
+      );
+    }
+
+    const mutationAction = action === 'forget_episodic' ? 'delete' : action === 'pin_episodic' ? 'pin' : 'unpin';
+    if (resolution.status === 'not_found') {
+      return this.composeMutationResponse(
+        language,
+        buildEpisodicNotFoundNote(language, kind, mutationAction),
+        [],
+        [],
+        [],
+      );
+    }
+
+    const target = resolution.target;
+    if (action === 'forget_episodic') {
+      if (target.source === 'managed' && target.id) {
+        const deleted = await this.memoryManagementService.forgetEpisodicMemory(target.id, scopeKey);
+        await this.deleteStoreEpisodicByExactSummary(scopeKey, kind, target.summary);
+        if (!deleted) {
+          return this.composeMutationResponse(
+            language,
+            buildEpisodicNotFoundNote(language, kind, 'delete'),
+            [],
+            [],
+            [],
+          );
+        }
+
+        return this.composeMutationResponse(
+          language,
+          buildForgetEpisodicDeletedNote(language, kind, target.summary),
+          [this.describeEpisodicCandidate(target)],
+          [this.describeEpisodicCandidate(target)],
+          [],
+        );
       }
+
+      if (!this.memoryStoreService || !target.storeEntryId) {
+        return this.composeMutationResponse(
+          language,
+          buildEpisodicNotFoundNote(language, kind, 'delete'),
+          [],
+          [],
+          [],
+        );
+      }
+
+      const deleted = await this.memoryStoreService.delete(target.storeEntryId);
+      if (!deleted) {
+        return this.composeMutationResponse(
+          language,
+          buildEpisodicNotFoundNote(language, kind, 'delete'),
+          [],
+          [],
+          [],
+        );
+      }
+
+      return this.composeMutationResponse(
+        language,
+        buildForgetEpisodicDeletedNote(language, kind, target.summary),
+        [this.describeEpisodicCandidate(target)],
+        [this.describeEpisodicCandidate(target)],
+        [],
+      );
     }
 
-    const fallbackEntry = await this.findStoreEpisodicEntry(scopeKey, kind, conversation, selectorText);
-    if (!fallbackEntry || !this.memoryStoreService) {
-      return buildEpisodicNotFoundNote(language, kind, pinned ? 'pin' : 'unpin');
+    const pinned = action === 'pin_episodic';
+    if (target.source === 'managed' && target.id) {
+      const updated = await this.memoryManagementService.setEpisodicMemoryPinned(target.id, pinned, scopeKey);
+      await this.setStoreEpisodicPinnedByExactSummary(scopeKey, kind, target.summary, pinned);
+      if (!updated) {
+        return this.composeMutationResponse(
+          language,
+          buildEpisodicNotFoundNote(language, kind, pinned ? 'pin' : 'unpin'),
+          [],
+          [],
+          [],
+        );
+      }
+
+      return this.composeMutationResponse(
+        language,
+        pinned ? buildEpisodicPinnedNote(language, kind, updated.summary) : buildEpisodicUnpinnedNote(language, kind, updated.summary),
+        [this.describeEpisodicCandidate(target)],
+        [this.describeEpisodicCandidate({ ...target, summary: updated.summary, pinned: updated.pinned })],
+        [],
+      );
     }
 
-    const updated = await this.memoryStoreService.update(fallbackEntry.id, { pinned });
+    if (!this.memoryStoreService || !target.storeEntryId) {
+      return this.composeMutationResponse(
+        language,
+        buildEpisodicNotFoundNote(language, kind, pinned ? 'pin' : 'unpin'),
+        [],
+        [],
+        [],
+      );
+    }
+
+    const updated = await this.memoryStoreService.update(target.storeEntryId, { pinned });
     if (!updated) {
-      return buildEpisodicNotFoundNote(language, kind, pinned ? 'pin' : 'unpin');
+      return this.composeMutationResponse(
+        language,
+        buildEpisodicNotFoundNote(language, kind, pinned ? 'pin' : 'unpin'),
+        [],
+        [],
+        [],
+      );
     }
 
     const summary = updated.summary ?? updated.content;
-    return pinned
-      ? buildEpisodicPinnedNote(language, kind, summary)
-      : buildEpisodicUnpinnedNote(language, kind, summary);
+    return this.composeMutationResponse(
+      language,
+      pinned ? buildEpisodicPinnedNote(language, kind, summary) : buildEpisodicUnpinnedNote(language, kind, summary),
+      [this.describeEpisodicCandidate(target)],
+      [this.describeEpisodicCandidate({ ...target, summary, pinned: updated.pinned })],
+      [],
+    );
   }
 
   private getScopeKey(conversation?: Conversation): string {
@@ -520,37 +760,111 @@ export class ConversationalMemoryCommandService {
     return episodic.length > 0 ? episodic.join('; ') : 'none';
   }
 
-  private async findStoreFactEntry(
-    scopeKey: string,
+  private async resolveFactCandidate(
     key: UserProfileFactKey,
-    expectedValue?: string,
-  ): Promise<MemoryEntry | undefined> {
-    const entries = await this.loadStoreEntries(scopeKey);
-    return entries.find((entry) => {
-      if (entry.kind !== 'fact' || !this.matchesStoreFactKey(entry, key)) {
-        return false;
+    expectedValue: string | undefined,
+    snapshot?: ManagedMemorySnapshot,
+    scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
+  ): Promise<CandidateResolution<FactMutationCandidate>> {
+    const managedCandidates = (snapshot?.userFacts ?? [])
+      .filter((fact) => fact.key === key)
+      .map((fact) => ({
+        source: 'managed' as const,
+        key,
+        value: fact.value,
+        pinned: fact.pinned,
+      }));
+
+    if (expectedValue) {
+      const managedExact = managedCandidates.filter(
+        (candidate) => this.normalizeForComparison(candidate.value) === this.normalizeForComparison(expectedValue),
+      );
+      if (managedExact.length === 1) {
+        const [managedTarget] = managedExact;
+        if (managedTarget) {
+          return { status: 'resolved', strategy: 'exact', target: managedTarget, candidates: managedExact };
+        }
+      }
+      if (managedExact.length > 1) {
+        return { status: 'ambiguous', strategy: 'exact', candidates: managedExact };
       }
 
-      if (!expectedValue) {
-        return true;
+      const storeCandidates = await this.listStoreFactCandidates(scopeKey, key);
+      const storeExact = storeCandidates.filter(
+        (candidate) => this.normalizeForComparison(candidate.value) === this.normalizeForComparison(expectedValue),
+      );
+      if (storeExact.length === 1) {
+        const [storeTarget] = storeExact;
+        if (storeTarget) {
+          return { status: 'resolved', strategy: 'exact', target: storeTarget, candidates: storeExact };
+        }
+      }
+      if (storeExact.length > 1) {
+        return { status: 'ambiguous', strategy: 'exact', candidates: storeExact };
       }
 
-      return this.normalizeForComparison(entry.content) === this.normalizeForComparison(expectedValue);
-    });
+      return { status: 'not_found', strategy: 'exact', candidates: [] };
+    }
+
+    if (managedCandidates.length === 1) {
+      const [managedTarget] = managedCandidates;
+      if (managedTarget) {
+        return { status: 'resolved', strategy: 'scoped', target: managedTarget, candidates: managedCandidates };
+      }
+    }
+    if (managedCandidates.length > 1) {
+      return { status: 'ambiguous', strategy: 'scoped', candidates: managedCandidates };
+    }
+
+    const storeCandidates = await this.listStoreFactCandidates(scopeKey, key);
+    if (storeCandidates.length === 1) {
+      const [storeTarget] = storeCandidates;
+      if (storeTarget) {
+        return { status: 'resolved', strategy: 'scoped', target: storeTarget, candidates: storeCandidates };
+      }
+    }
+    if (storeCandidates.length > 1) {
+      return { status: 'ambiguous', strategy: 'scoped', candidates: storeCandidates };
+    }
+
+    return { status: 'not_found', strategy: 'scoped', candidates: [] };
   }
 
-  private async deleteStoreFact(scopeKey: string, key: UserProfileFactKey, expectedValue?: string): Promise<void> {
+  private async listStoreFactCandidates(
+    scopeKey: string,
+    key: UserProfileFactKey,
+  ): Promise<FactMutationCandidate[]> {
+    const entries = await this.loadStoreEntries(scopeKey);
+    return entries
+      .filter((entry) => entry.kind === 'fact' && this.matchesStoreFactKey(entry, key))
+      .map((entry) => ({
+        source: 'store' as const,
+        key,
+        value: entry.content,
+        pinned: entry.pinned,
+        storeEntryId: entry.id,
+      }));
+  }
+
+  private async deleteStoreFactByExactValue(
+    scopeKey: string,
+    key: UserProfileFactKey,
+    expectedValue: string,
+  ): Promise<void> {
     if (!this.memoryStoreService) {
       return;
     }
 
-    const target = await this.findStoreFactEntry(scopeKey, key, expectedValue);
-    if (target) {
-      await this.memoryStoreService.delete(target.id);
+    const matches = (await this.listStoreFactCandidates(scopeKey, key)).filter(
+      (candidate) => this.normalizeForComparison(candidate.value) === this.normalizeForComparison(expectedValue),
+    );
+    const [match] = matches;
+    if (matches.length === 1 && match?.storeEntryId) {
+      await this.memoryStoreService.delete(match.storeEntryId);
     }
   }
 
-  private async setStoreFactPinned(
+  private async setStoreFactPinnedByExactValue(
     scopeKey: string,
     key: UserProfileFactKey,
     expectedValue: string,
@@ -560,40 +874,242 @@ export class ConversationalMemoryCommandService {
       return;
     }
 
-    const target = await this.findStoreFactEntry(scopeKey, key, expectedValue);
-    if (target) {
-      await this.memoryStoreService.update(target.id, { pinned });
+    const matches = (await this.listStoreFactCandidates(scopeKey, key)).filter(
+      (candidate) => this.normalizeForComparison(candidate.value) === this.normalizeForComparison(expectedValue),
+    );
+    const [match] = matches;
+    if (matches.length === 1 && match?.storeEntryId) {
+      await this.memoryStoreService.update(match.storeEntryId, { pinned });
     }
   }
 
-  private async findStoreEpisodicEntry(
-    scopeKey: string,
+  private async resolveEpisodicCandidate(
     kind: EpisodicMemoryKind,
     conversation?: Conversation,
     selectorText = '',
-  ): Promise<MemoryEntry | undefined> {
-    const entries = (await this.loadStoreEntries(scopeKey)).filter((entry) => this.inferStoreEpisodicKind(entry) === kind);
-    return this.pickRelevantStoreEntry(entries, conversation, selectorText);
+    snapshot?: ManagedMemorySnapshot,
+    scopeKey = DEFAULT_LOCAL_MEMORY_SCOPE,
+  ): Promise<CandidateResolution<EpisodicMutationCandidate>> {
+    const queryContext = `${this.buildRecentConversationContext(conversation)} ${selectorText}`.trim();
+    const queryTokens = this.tokenize(queryContext);
+    const desiredConstraintPolarity = kind === 'constraint' ? this.inferConstraintPolarity(queryContext) : 'unknown';
+    const managedCandidates = (snapshot?.episodicMemories ?? [])
+      .filter((entry) => entry.kind === kind)
+      .map((entry) => ({
+        source: 'managed' as const,
+        id: entry.id,
+        kind,
+        summary: entry.summary,
+        updatedAt: entry.updatedAt,
+        pinned: entry.pinned,
+        overlap: this.calculateOverlap(entry.summary, queryTokens),
+        polarityScore: this.getConstraintPolarityScore(entry.summary, desiredConstraintPolarity),
+      }));
+    const managedResolution = this.resolveEpisodicCandidates(managedCandidates, selectorText);
+    if (managedResolution.status !== 'not_found' || managedCandidates.length > 0) {
+      return managedResolution;
+    }
+
+    const storeCandidates = (await this.loadStoreEntries(scopeKey))
+      .filter((entry) => this.inferStoreEpisodicKind(entry) === kind)
+      .map((entry) => ({
+        source: 'store' as const,
+        kind,
+        summary: entry.summary ?? entry.content,
+        updatedAt: entry.updatedAt,
+        pinned: entry.pinned,
+        overlap: this.calculateOverlap(entry.summary ?? entry.content, queryTokens),
+        polarityScore: this.getConstraintPolarityScore(entry.summary ?? entry.content, desiredConstraintPolarity),
+        storeEntryId: entry.id,
+      }));
+    return this.resolveEpisodicCandidates(storeCandidates, selectorText);
   }
 
-  private async setStoreEpisodicPinned(
+  private resolveEpisodicCandidates(
+    candidates: EpisodicMutationCandidate[],
+    selectorText: string,
+  ): CandidateResolution<EpisodicMutationCandidate> {
+    if (candidates.length === 0) {
+      return { status: 'not_found', strategy: 'scoped', candidates: [] };
+    }
+
+    const exactCandidates = candidates.filter((candidate) => this.matchesExactEpisodicCandidate(candidate.summary, selectorText));
+    if (exactCandidates.length === 1) {
+      const [exactTarget] = exactCandidates;
+      if (exactTarget) {
+        return { status: 'resolved', strategy: 'exact', target: exactTarget, candidates: exactCandidates };
+      }
+    }
+    if (exactCandidates.length > 1) {
+      return { status: 'ambiguous', strategy: 'exact', candidates: exactCandidates };
+    }
+
+    const ranked = [...candidates].sort((left, right) => this.compareEpisodicCandidates(right, left));
+    const top = ranked[0];
+    const second = ranked[1];
+    if (!top) {
+      return { status: 'not_found', strategy: 'scoped', candidates: [] };
+    }
+    if (top.overlap === 0 && ranked.length > 1) {
+      return { status: 'ambiguous', strategy: 'scoped', candidates: ranked.slice(0, 3) };
+    }
+    if (second && this.compareEpisodicCandidates(top, second) === 0) {
+      return {
+        status: 'ambiguous',
+        strategy: 'scoped',
+        candidates: ranked.filter((candidate) => this.compareEpisodicCandidates(top, candidate) === 0).slice(0, 3),
+      };
+    }
+    return { status: 'resolved', strategy: 'scoped', target: top, candidates: [top] };
+  }
+
+  private compareEpisodicCandidates(
+    left: EpisodicMutationCandidate,
+    right: EpisodicMutationCandidate,
+  ): number {
+    const overlapDelta = left.overlap - right.overlap;
+    if (overlapDelta !== 0) {
+      return overlapDelta;
+    }
+
+    const polarityDelta = left.polarityScore - right.polarityScore;
+    if (polarityDelta !== 0) {
+      return polarityDelta;
+    }
+
+    const recencyDelta = left.updatedAt.localeCompare(right.updatedAt);
+    if (recencyDelta !== 0) {
+      return recencyDelta;
+    }
+
+    return Number(Boolean(left.pinned)) - Number(Boolean(right.pinned));
+  }
+
+  private matchesExactEpisodicCandidate(summary: string, selectorText: string): boolean {
+    const quoted = this.extractQuotedSelector(selectorText);
+    if (quoted) {
+      return this.normalizeForComparison(summary) === this.normalizeForComparison(quoted);
+    }
+
+    const normalizedSelector = this.normalizeForComparison(selectorText);
+    const normalizedSummary = this.normalizeForComparison(summary);
+    return normalizedSelector.length > normalizedSummary.length && normalizedSelector.includes(normalizedSummary);
+  }
+
+  private extractQuotedSelector(value: string): string | undefined {
+    const quotedMatch = /["“«](.+?)["”»]/u.exec(value);
+    const normalized = quotedMatch?.[1]?.trim().replace(/[.!?]+$/g, '').trim();
+    return normalized || undefined;
+  }
+
+  private async deleteStoreEpisodicByExactSummary(
     scopeKey: string,
     kind: EpisodicMemoryKind,
-    conversation: Conversation | undefined,
-    selectorText: string,
-    pinned: boolean,
-    expectedSummary: string,
+    summary: string,
   ): Promise<void> {
     if (!this.memoryStoreService) {
       return;
     }
 
-    const target =
-      (await this.findStoreEpisodicEntry(scopeKey, kind, conversation, selectorText)) ??
-      (await this.findStoreEpisodicEntry(scopeKey, kind, conversation, expectedSummary));
-    if (target) {
-      await this.memoryStoreService.update(target.id, { pinned });
+    const matches = (await this.loadStoreEntries(scopeKey)).filter(
+      (entry) =>
+        this.inferStoreEpisodicKind(entry) === kind &&
+        this.normalizeForComparison(entry.summary ?? entry.content) === this.normalizeForComparison(summary),
+    );
+    const [match] = matches;
+    if (matches.length === 1 && match) {
+      await this.memoryStoreService.delete(match.id);
     }
+  }
+
+  private async setStoreEpisodicPinnedByExactSummary(
+    scopeKey: string,
+    kind: EpisodicMemoryKind,
+    summary: string,
+    pinned: boolean,
+  ): Promise<void> {
+    if (!this.memoryStoreService) {
+      return;
+    }
+
+    const matches = (await this.loadStoreEntries(scopeKey)).filter(
+      (entry) =>
+        this.inferStoreEpisodicKind(entry) === kind &&
+        this.normalizeForComparison(entry.summary ?? entry.content) === this.normalizeForComparison(summary),
+    );
+    const [match] = matches;
+    if (matches.length === 1 && match) {
+      await this.memoryStoreService.update(match.id, { pinned });
+    }
+  }
+
+  private composeMutationResponse(
+    language: CommandResponseLanguage,
+    note: string,
+    found: string[],
+    changed: string[],
+    unchanged: string[],
+    reason?: string,
+  ): string {
+    const none = language === 'ru' ? 'ничего' : 'none';
+    const parts = [
+      note,
+      language === 'ru' ? `Найдено: ${found.length > 0 ? found.join('; ') : none}.` : `Found: ${found.length > 0 ? found.join('; ') : none}.`,
+      language === 'ru'
+        ? `Изменено: ${changed.length > 0 ? changed.join('; ') : none}.`
+        : `Changed: ${changed.length > 0 ? changed.join('; ') : none}.`,
+      language === 'ru'
+        ? `Без изменений: ${unchanged.length > 0 ? unchanged.join('; ') : none}.`
+        : `Unchanged: ${unchanged.length > 0 ? unchanged.join('; ') : none}.`,
+    ];
+    if (reason) {
+      parts.push(language === 'ru' ? `Причина: ${reason}.` : `Reason: ${reason}.`);
+    }
+    return parts.join(' ');
+  }
+
+  private buildFactAmbiguousNote(
+    language: CommandResponseLanguage,
+    key: UserProfileFactKey,
+    expectedValue?: string,
+  ): string {
+    if (language === 'ru') {
+      return expectedValue
+        ? `Я нашёл несколько сохранённых фактов о ${key} со значением, похожим на "${expectedValue}", и ничего не изменил.`
+        : `Я нашёл несколько сохранённых фактов о ${key} и ничего не изменил.`;
+    }
+
+    return expectedValue
+      ? `I found multiple stored ${key} facts matching "${expectedValue}" and changed nothing.`
+      : `I found multiple stored ${key} facts and changed nothing.`;
+  }
+
+  private buildEpisodicAmbiguousNote(language: CommandResponseLanguage, kind: EpisodicMemoryKind): string {
+    if (language === 'ru') {
+      return `Я нашёл несколько подходящих записей об ${kind} и ничего не изменил.`;
+    }
+
+    return `I found multiple matching ${kind} memories and changed nothing.`;
+  }
+
+  private buildAmbiguityReason(language: CommandResponseLanguage, strategy: 'exact' | 'scoped'): string {
+    if (language === 'ru') {
+      return strategy === 'exact'
+        ? 'несколько точных совпадений; уточни одно конкретное сохранённое значение'
+        : 'несколько scoped-кандидатов; укажи точное сохранённое значение или процитируй запись';
+    }
+
+    return strategy === 'exact'
+      ? 'multiple exact matches were found; specify one exact stored value'
+      : 'multiple scoped candidates were found; specify the exact stored value or quote the target entry';
+  }
+
+  private describeFactCandidate(candidate: FactMutationCandidate): string {
+    return `${candidate.key}="${candidate.value}"${candidate.pinned ? ' [pinned]' : ''}`;
+  }
+
+  private describeEpisodicCandidate(candidate: EpisodicMutationCandidate): string {
+    return `${candidate.kind}="${candidate.summary}"${candidate.pinned ? ' [pinned]' : ''}`;
   }
 
   private inferFactKeyFromStoreEntry(entry: MemoryEntry): UserProfileFactKey | undefined {

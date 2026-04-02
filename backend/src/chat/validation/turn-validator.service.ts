@@ -11,7 +11,7 @@ import {
   validateMemoryGroundingResponse,
 } from '../../memory/grounding/grounding-policy';
 import { LlmService } from '../../llm/llm.service';
-import type { LlmMessage } from '../../llm/interfaces/llm.interface';
+import type { LlmCompletionOptions, LlmMessage } from '../../llm/interfaces/llm.interface';
 
 export interface TurnValidationViolation {
   source: 'compliance' | 'grounding';
@@ -80,9 +80,10 @@ export class TurnResponseValidatorService {
     messages: LlmMessage[],
     responseDirectives: ResponseDirectives,
     memoryGrounding: MemoryGroundingContext = EMPTY_MEMORY_GROUNDING_CONTEXT,
+    completionOptions?: LlmCompletionOptions,
   ): Promise<string> {
-    const initialResult = await this.llmService.complete(messages);
-    return this.validateDraftWithRetry(messages, initialResult.content, responseDirectives, memoryGrounding);
+    const initialResult = await this.llmService.complete(messages, completionOptions);
+    return this.validateDraftWithRetry(messages, initialResult.content, responseDirectives, memoryGrounding, completionOptions);
   }
 
   async validateDraftWithRetry(
@@ -90,6 +91,7 @@ export class TurnResponseValidatorService {
     draft: string,
     responseDirectives: ResponseDirectives,
     memoryGrounding: MemoryGroundingContext = EMPTY_MEMORY_GROUNDING_CONTEXT,
+    completionOptions?: LlmCompletionOptions,
   ): Promise<string> {
     const initialValidation = this.validate(draft, responseDirectives, memoryGrounding);
 
@@ -108,7 +110,7 @@ export class TurnResponseValidatorService {
       { role: 'system', content: retryInstruction },
     ];
 
-    const retryResult = await this.llmService.complete(retryMessages);
+    const retryResult = await this.llmService.complete(retryMessages, completionOptions);
     const retryValidation = this.validate(retryResult.content, responseDirectives, memoryGrounding);
 
     if (!retryValidation.compliant) {

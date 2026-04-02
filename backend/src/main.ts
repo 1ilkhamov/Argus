@@ -8,6 +8,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { DEFAULT_CORS_ORIGIN, DEFAULT_PORT } from './config/defaults';
 import { FileLoggerService } from './common/logger/file-logger.service';
+import { BootstrapDiagnosticsService } from './ops/bootstrap-diagnostics.service';
 
 type NestLoggerLevel = 'error' | 'warn' | 'log' | 'debug' | 'verbose' | 'fatal';
 
@@ -50,6 +51,10 @@ async function bootstrap() {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     credentials: true,
   });
+
+  await app.init();
+  const bootstrapDiagnosticsService = app.get(BootstrapDiagnosticsService);
+  logger.log(`Bootstrap diagnostics ${JSON.stringify(bootstrapDiagnosticsService.getSummary())}`);
 
   await app.listen(port);
   logger.log(`Argus backend running on http://localhost:${port}`);

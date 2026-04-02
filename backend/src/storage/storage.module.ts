@@ -2,6 +2,10 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { CHAT_REPOSITORY } from '../chat/repositories/chat.repository';
+import { FileTurnExecutionStateRepository } from '../chat/runtime/file-turn-execution-state.repository';
+import { PostgresTurnExecutionStateRepository } from '../chat/runtime/postgres-turn-execution-state.repository';
+import { SqliteTurnExecutionStateRepository } from '../chat/runtime/sqlite-turn-execution-state.repository';
+import { TURN_EXECUTION_STATE_REPOSITORY } from '../chat/runtime/turn-execution-state.repository';
 import { FileChatRepository } from '../chat/repositories/file-chat.repository';
 import { PostgresChatRepository } from '../chat/repositories/postgres-chat.repository';
 import { SqliteChatRepository } from '../chat/repositories/sqlite-chat.repository';
@@ -23,8 +27,11 @@ import { PostgresConnectionService } from './postgres-connection.service';
     PostgresConnectionService,
     FileStoreService,
     FileChatRepository,
+    FileTurnExecutionStateRepository,
     PostgresChatRepository,
+    PostgresTurnExecutionStateRepository,
     SqliteChatRepository,
+    SqliteTurnExecutionStateRepository,
     FileMemoryRepository,
     PostgresMemoryRepository,
     SqliteMemoryRepository,
@@ -45,6 +52,32 @@ import { PostgresConnectionService } from './postgres-connection.service';
           return postgresRepo;
         }
         return sqliteRepo;
+      },
+    },
+    {
+      provide: TURN_EXECUTION_STATE_REPOSITORY,
+      inject: [
+        ConfigService,
+        FileTurnExecutionStateRepository,
+        SqliteTurnExecutionStateRepository,
+        PostgresTurnExecutionStateRepository,
+      ],
+      useFactory: (
+        configService: ConfigService,
+        fileRepository: FileTurnExecutionStateRepository,
+        sqliteRepository: SqliteTurnExecutionStateRepository,
+        postgresRepository: PostgresTurnExecutionStateRepository,
+      ) => {
+        const storageDriver = configService.get<string>('storage.driver', 'sqlite');
+        if (storageDriver === 'file') {
+          return fileRepository;
+        }
+
+        if (storageDriver === 'postgres') {
+          return postgresRepository;
+        }
+
+        return sqliteRepository;
       },
     },
     {
@@ -111,6 +144,9 @@ import { PostgresConnectionService } from './postgres-connection.service';
     FileChatRepository,
     PostgresChatRepository,
     SqliteChatRepository,
+    FileTurnExecutionStateRepository,
+    PostgresTurnExecutionStateRepository,
+    SqliteTurnExecutionStateRepository,
     FileMemoryRepository,
     PostgresMemoryRepository,
     SqliteMemoryRepository,
@@ -120,6 +156,7 @@ import { PostgresConnectionService } from './postgres-connection.service';
     SqliteKnowledgeGraphRepository,
     KNOWLEDGE_GRAPH_REPOSITORY,
     CHAT_REPOSITORY,
+    TURN_EXECUTION_STATE_REPOSITORY,
     MEMORY_REPOSITORY,
     MEMORY_ENTRY_REPOSITORY,
   ],

@@ -61,14 +61,18 @@ describe('ProcessManagerService', () => {
     });
 
     it('should return only new output on subsequent polls', async () => {
-      const info = service.start('echo line1 && sleep 0.1 && echo line2');
+      const info = service.start(`node -e "console.log('line1'); setTimeout(() => console.log('line2'), 250)"`);
 
-      await sleep(100);
-      const poll1 = service.poll(info.id);
+      const poll1 = await waitForPoll(
+        () => service.poll(info.id),
+        (result) => result.stdout.includes('line1') && !result.stdout.includes('line2'),
+      );
       expect(poll1.stdout).toContain('line1');
 
-      await sleep(200);
-      const poll2 = service.poll(info.id);
+      const poll2 = await waitForPoll(
+        () => service.poll(info.id),
+        (result) => result.stdout.includes('line2'),
+      );
       // line1 was already consumed — only line2 should appear
       expect(poll2.stdout).toContain('line2');
       expect(poll2.stdout).not.toContain('line1');
@@ -195,4 +199,24 @@ describe('ProcessManagerService', () => {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPoll<T>(
+  read: () => T,
+  predicate: (value: T) => boolean,
+  timeoutMs = 1_500,
+  intervalMs = 25,
+): Promise<T> {
+  const startedAt = Date.now();
+  let lastValue = read();
+
+  while (!predicate(lastValue)) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error('Timed out waiting for process poll condition');
+    }
+    await sleep(intervalMs);
+    lastValue = read();
+  }
+
+  return lastValue;
 }

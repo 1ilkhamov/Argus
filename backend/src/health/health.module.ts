@@ -15,5 +15,6 @@ import { HealthService } from './health.service';
   imports: [LlmModule, ChatModule, AgentModule, MemoryModule, EmbeddingModule],
   controllers: [HealthController],
   providers: [HealthService, ApiKeyGuard, RateLimitGuard, RateLimitService],
+  exports: [HealthService],
 })
 export class HealthModule {}

@@ -361,11 +361,11 @@ export class MemoryResolverService {
   }
 
   private formatFact(fact: UserProfileFact): string {
-    return `${fact.key}=${fact.value}${fact.pinned ? ' [pinned]' : ''}`;
+    return `${fact.key}{len=${fact.value.length}, pinned=${fact.pinned ? 'yes' : 'no'}}`;
   }
 
   private formatEntry(entry: EpisodicMemoryEntry): string {
-    return `${entry.kind}=${entry.summary}${entry.pinned ? ' [pinned]' : ''}`;
+    return `${entry.kind}{len=${entry.summary.length}, pinned=${entry.pinned ? 'yes' : 'no'}, salience=${entry.salience.toFixed(2)}}`;
   }
 
   private toEntryComparisonKey(entry: EpisodicMemoryEntry): string {

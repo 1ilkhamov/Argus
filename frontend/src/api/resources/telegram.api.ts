@@ -2,6 +2,9 @@ import { apiFetch } from '../http/client';
 import { API_ENDPOINTS } from '@/config';
 
 export interface TelegramStatus {
+  enabled: boolean;
+  tokenConfigured: boolean;
+  tokenSource: 'settings' | 'env' | 'none';
   running: boolean;
   username: string | null;
   mode: 'polling' | 'webhook' | null;

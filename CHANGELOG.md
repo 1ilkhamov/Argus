@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-04-02
+
+### Added
+
+- Added persistent turn-execution planning/runtime services so chat turns can carry budget snapshots, active continuation checkpoints, and staged execution metadata across requests
+- Added deterministic exact-first managed-memory mutation semantics in `backend/src/memory/conversational-memory-command.service.ts`, including ambiguity-safe fact/episodic mutations and richer snapshot inspection output
+- Added unified bootstrap/runtime diagnostics in `backend/src/ops/bootstrap-diagnostics.service.ts` and `/api/ops/diagnostics`, covering health, LLM runtime, soul config source, startup storage/Telegram/AppleScript state, managed-memory processing state, prompt diagnostics, continuation checkpoints, Qdrant readiness, and actionable warnings
+- Added unified diagnostics cards, warnings, and continuation visibility to `frontend/src/components/ops/OpsConsoleV2.tsx` through a typed `ops.store` diagnostics slice
+- Added version-specific release runbook `docs/release-0.2.3.md` for runtime hardening, smoke checks, and rollback expectations
+
+### Changed
+
+- Refactored `backend/src/chat/chat.service.ts` around prompt assembly, budget diagnostics, staged execution planning, and checkpoint-aware continuation handling for large tasks
+- Tightened `backend/src/chat/runtime/prompt-budget.service.ts` and `backend/src/llm/llm.service.ts` so prompt diagnostics now expose explicit completion/retry/tool-round/structured-finish reserves and classify context-window exhaustion as `budget_exhausted`
+- Hardened startup/config behavior so soul config runtime state now reports `sourceKind` and `configuredPath`, Telegram runtime fully respects `TELEGRAM_ENABLED`, and AppleScript exposes OS-aware capability semantics instead of noisy unsupported-host warnings
+- Updated frontend ops API/store contracts and runtime tab UX to treat `/api/ops/diagnostics` as the authoritative operator surface for prompt, continuation, startup, monitored-chat, and Telegram runtime diagnostics
+- Synced release metadata and documentation to the 0.2.3 runtime contract, including `RELEASING.md`, `docs/operations.md`, and `docs/README.md`
+
+### Verified
+
+- `backend`: `npm run build`
+- `backend`: `npx jest --runInBand src/telegram/auth/telegram.auth.service.spec.ts src/telegram/bot/telegram.service.spec.ts src/tools/builtin/system/applescript.tool.spec.ts`
+- `backend`: `npx jest --config ./test/jest-e2e.json --runInBand test/e2e/ops-admin.e2e-spec.ts`
+- `frontend`: `npm run build`
+- `frontend`: `npm run test -- src/stores/ops/ops.store.test.ts`
+
 ## [0.2.2] - 2026-04-01
 
 ### Added

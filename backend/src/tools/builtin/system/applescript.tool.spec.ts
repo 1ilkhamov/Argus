@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 
@@ -95,6 +96,7 @@ describe('AppleScriptTool', () => {
 
   it('should not register on non-macOS platforms', async () => {
     mockPlatform = 'linux';
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     const registry = { register: jest.fn() };
     const module = await Test.createTestingModule({
       providers: [
@@ -110,6 +112,41 @@ describe('AppleScriptTool', () => {
     const linuxTool = module.get(AppleScriptTool);
     linuxTool.onModuleInit();
     expect(registry.register).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(linuxTool.getRuntimeState()).toEqual({
+      platform: 'linux',
+      supported: false,
+      enabled: true,
+      registered: false,
+      status: 'unsupported_os',
+    });
+    warnSpy.mockRestore();
+  });
+
+  it('should expose available runtime state after successful registration', async () => {
+    const registry = { register: jest.fn() };
+    const module = await Test.createTestingModule({
+      providers: [
+        AppleScriptTool,
+        { provide: ToolRegistryService, useValue: registry },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn(() => true) },
+        },
+      ],
+    }).compile();
+
+    const macTool = module.get(AppleScriptTool);
+    macTool.onModuleInit();
+
+    expect(registry.register).toHaveBeenCalledWith(macTool);
+    expect(macTool.getRuntimeState()).toEqual({
+      platform: 'darwin',
+      supported: true,
+      enabled: true,
+      registered: true,
+      status: 'available',
+    });
   });
 
   // ─── Basic execution ───────────────────────────────────────────────────

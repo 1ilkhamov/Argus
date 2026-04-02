@@ -172,6 +172,14 @@ describe('Chat API (e2e)', () => {
           model: 'test-model',
           responseTimeMs: 1,
         }),
+        getRuntimeProfile: () => ({
+          provider: 'openai',
+          model: 'test-model',
+          maxCompletionTokens: 4096,
+          contextWindowTokens: 128000,
+          completionTimeoutMs: 120000,
+          streamTimeoutMs: 120000,
+        }),
       })
       .compile();
 

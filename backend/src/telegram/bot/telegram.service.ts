@@ -7,6 +7,9 @@ import { TelegramUpdateHandler } from './telegram.update-handler';
 import type { TelegramConfig } from '../telegram.types';
 
 export interface TelegramStatus {
+  enabled: boolean;
+  tokenConfigured: boolean;
+  tokenSource: 'settings' | 'env' | 'none';
   running: boolean;
   username: string | null;
   mode: 'polling' | 'webhook' | null;
@@ -22,6 +25,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private bot: Telegraf | null = null;
   private botUsername: string | null = null;
   private botMode: 'polling' | 'webhook' | null = null;
+  private tokenConfigured = false;
+  private tokenSource: 'settings' | 'env' | 'none' = 'none';
   private readonly config: TelegramConfig;
 
   constructor(
@@ -33,7 +38,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit(): Promise<void> {
-    // Try to start with settings from DB first, then fall back to .env config
+    if (!this.config.enabled) {
+      this.tokenConfigured = false;
+      this.tokenSource = 'none';
+      this.logger.log('Telegram bot disabled via TELEGRAM_ENABLED=false');
+      return;
+    }
+
     const botToken = await this.resolveToken();
 
     if (!botToken) {
@@ -68,6 +79,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    */
   getStatus(): TelegramStatus {
     return {
+      enabled: this.config.enabled,
+      tokenConfigured: this.tokenConfigured,
+      tokenSource: this.tokenSource,
       running: this.bot !== null,
       username: this.botUsername,
       mode: this.botMode,
@@ -93,6 +107,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     await this.stopBot();
 
+    if (!this.config.enabled) {
+      this.tokenConfigured = false;
+      this.tokenSource = 'none';
+      this.logger.log('Telegram bot remains disabled via TELEGRAM_ENABLED=false');
+      return this.getStatus();
+    }
+
     const botToken = await this.resolveToken();
     if (!botToken) {
       this.logger.log('No bot token configured — bot stopped');
@@ -114,9 +135,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   // ─── Private ──────────────────────────────────────────────────────────────
 
   private async resolveToken(): Promise<string> {
-    // Settings DB takes priority over .env
     const dbToken = await this.settingsService.getValue('telegram.bot_token');
-    return dbToken || this.config.botToken;
+    const normalizedDbToken = dbToken?.trim() ?? '';
+    if (normalizedDbToken) {
+      this.tokenConfigured = true;
+      this.tokenSource = 'settings';
+      return normalizedDbToken;
+    }
+
+    const normalizedEnvToken = this.config.botToken.trim();
+    if (normalizedEnvToken) {
+      this.tokenConfigured = true;
+      this.tokenSource = 'env';
+      return normalizedEnvToken;
+    }
+
+    this.tokenConfigured = false;
+    this.tokenSource = 'none';
+    return '';
   }
 
   private async startBot(token: string): Promise<void> {

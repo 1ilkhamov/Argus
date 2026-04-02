@@ -57,10 +57,14 @@ npm run start
 ### 2. Проверка runtime
 
 - сделан backup release-critical данных, включая `STORAGE_MEMORY_DB_FILE` и его `-wal` / `-shm` sidecars
+- сохранён active soul override, если используется `SOUL_CONFIG_PATH`
 - backend стартует локально
 - frontend стартует локально
 - health endpoint отвечает
+- `/api/ops/diagnostics` отвечает и отражает ожидаемые `soul`, `startup`, `prompt`, `continuation` и `warnings`
 - auth-путь работает
+- `TELEGRAM_ENABLED` / `TELEGRAM_ALLOWED_USERS` ведут себя ожидаемо для целевого окружения
+- OS-specific tools отражают capability state production-safe образом
 - browser mode через public sessions работает без скрытой proxy-магии
 - semantic memory путь работает с embeddings + Qdrant
 - env examples достаточно полны для нового пользователя
@@ -72,7 +76,7 @@ npm run start
 - lint проходит
 - build проходит
 - CI workflow валиден
-- smoke checks покрывают API-key auth и public-session flow
+- smoke checks покрывают API-key auth, public-session flow и version-specific runtime diagnostics
 
 ### 4. GitHub release
 
@@ -87,6 +91,7 @@ npm run start
 ## Version-specific runbooks
 
 - `docs/release-0.2.0.md` — migration story, smoke checks и rollback notes для ops/runtime release `0.2.0`
+- `docs/release-0.2.3.md` — runtime hardening, diagnostics, continuation state, startup/config semantics и rollback notes для release `0.2.3`
 
 ## Версионирование
 

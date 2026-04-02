@@ -12,6 +12,22 @@ import {
 } from './soul-config.types';
 
 const DEFAULT_SOUL_PATH = path.join(__dirname, 'soul.default.yml');
+const DATA_SOUL_PATH = path.resolve(process.cwd(), 'data', 'soul.yml');
+const SOURCE_SOUL_PATH = path.resolve(process.cwd(), 'src', 'agent', 'identity', 'config', 'soul.default.yml');
+
+export type SoulConfigSourceKind =
+  | 'configured_path'
+  | 'data_override'
+  | 'bundled_default'
+  | 'source_default'
+  | 'core_contract_fallback';
+
+export interface SoulConfigRuntimeState {
+  source: string;
+  sourceKind: SoulConfigSourceKind;
+  watching: boolean;
+  configuredPath?: string;
+}
 
 @Injectable()
 export class SoulConfigService implements OnModuleInit, OnModuleDestroy {
@@ -19,6 +35,8 @@ export class SoulConfigService implements OnModuleInit, OnModuleDestroy {
   private config!: SoulConfig;
   private watcher?: fs.FSWatcher;
   private readonly configPath: string;
+  private loadedFrom = 'core_contract_fallback';
+  private loadedSourceKind: SoulConfigSourceKind = 'core_contract_fallback';
 
   constructor(private readonly configService: ConfigService) {
     this.configPath = this.configService.get<string>('soul.configPath') || '';
@@ -38,24 +56,33 @@ export class SoulConfigService implements OnModuleInit, OnModuleDestroy {
     return this.config;
   }
 
+  getRuntimeState(): SoulConfigRuntimeState {
+    return {
+      source: this.loadedFrom,
+      sourceKind: this.loadedSourceKind,
+      watching: Boolean(this.watcher),
+      ...(this.configPath ? { configuredPath: this.configPath } : {}),
+    };
+  }
+
   // ─── Loading ────────────────────────────────────────────────────────────
 
   private loadConfig(): SoulConfig {
     // Priority: user-specified path → data/soul.yml → bundled default → core-contract fallback
-    const candidates = [
-      this.configPath,
-      path.resolve(process.cwd(), 'data', 'soul.yml'),
-      DEFAULT_SOUL_PATH,
-      // Fallback for dev mode: __dirname may point to dist/ where YAML isn't copied
-      path.resolve(process.cwd(), 'src', 'agent', 'identity', 'config', 'soul.default.yml'),
-    ].filter(Boolean);
+    const candidates = [...new Set([this.configPath, DATA_SOUL_PATH, DEFAULT_SOUL_PATH, SOURCE_SOUL_PATH].filter(Boolean))];
 
     for (const filePath of candidates) {
       const result = this.tryLoadFile(filePath);
-      if (result) return result;
+      if (result) {
+        this.loadedFrom = filePath;
+        this.loadedSourceKind = this.resolveSourceKind(filePath);
+        return result;
+      }
     }
 
     this.logger.warn('No soul config found, using core-contract fallback');
+    this.loadedFrom = 'core_contract_fallback';
+    this.loadedSourceKind = 'core_contract_fallback';
     return this.coreContractFallback();
   }
 
@@ -119,8 +146,26 @@ export class SoulConfigService implements OnModuleInit, OnModuleDestroy {
     const result = this.tryLoadFile(filePath);
     if (result) {
       this.config = result;
+      this.loadedFrom = filePath;
+      this.loadedSourceKind = this.resolveSourceKind(filePath);
       this.logger.log(`Soul config hot-reloaded from ${filePath}`);
     }
+  }
+
+  private resolveSourceKind(filePath: string): SoulConfigSourceKind {
+    if (this.configPath && filePath === this.configPath) {
+      return 'configured_path';
+    }
+    if (filePath === DATA_SOUL_PATH) {
+      return 'data_override';
+    }
+    if (filePath === DEFAULT_SOUL_PATH) {
+      return 'bundled_default';
+    }
+    if (filePath === SOURCE_SOUL_PATH) {
+      return 'source_default';
+    }
+    return 'configured_path';
   }
 
   private stopWatching(): void {

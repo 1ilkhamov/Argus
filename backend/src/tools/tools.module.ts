@@ -126,6 +126,7 @@ import { PendingNotifyService } from './core/pending-notify.service';
     ToolRegistryService,
     ToolExecutorService,
     ToolOrchestratorService,
+    AppleScriptTool,
     PendingNotifyService,
   ],
 })
