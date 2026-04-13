@@ -17,7 +17,7 @@
     "lucide-react": "^0.460.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react-dom": "^19.2.4",
     "react-markdown": "^9.0.1",
     "zustand": "^5.0.0"
   },
@@ -25,7 +25,7 @@
     "@types/node": "^22.10.2",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
+    "@types/react-dom": "^19.2.3",
     "@typescript-eslint/eslint-plugin": "^8.29.0",
     "@typescript-eslint/parser": "^8.29.0",
     "@vitejs/plugin-react": "^4.3.4",
